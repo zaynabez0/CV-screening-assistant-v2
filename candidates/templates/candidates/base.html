@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}CV Screening{% endblock %}</title>
+  <style>
+    :root { --ink:#1a1a1a; --muted:#666; --line:#ddd; --bg:#fff;
+            --warn-bg:#fff4e5; --warn-line:#e8a33d; --warn-ink:#8a4b00;
+            --bad-bg:#fdecea; --bad-line:#d9534f; --ok:#2e7d32; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink);
+           background:var(--bg); max-width:960px; margin:0 auto; padding:2rem 1.25rem; line-height:1.5; }
+    h1 { font-size:1.5rem; margin:0 0 .25rem; }
+    h2 { font-size:1.1rem; margin:2rem 0 .75rem; }
+    .sub { color:var(--muted); margin:0 0 1.5rem; }
+    .msg { padding:.7rem .9rem; border-radius:6px; margin:.4rem 0; border:1px solid var(--line); }
+    .msg.success { border-color:var(--ok); background:#f1f8f1; }
+    .msg.error   { border-color:var(--bad-line); background:var(--bad-bg); }
+    .msg.warning { border-color:var(--warn-line); background:var(--warn-bg); }
+    .card { border:1px solid var(--line); border-radius:8px; padding:1rem; margin:.75rem 0; }
+    .card.flagged { border-left:5px solid var(--warn-line); background:var(--warn-bg); }
+    .card.rejected { border-left:5px solid var(--bad-line); background:var(--bad-bg); }
+    .badge { display:inline-block; font-size:.75rem; font-weight:600; padding:.15rem .5rem;
+             border-radius:10px; border:1px solid var(--line); }
+    .badge.low    { background:var(--warn-line); color:#fff; border-color:var(--warn-line); }
+    .badge.medium { background:#fdf3d7; color:#7a5c00; border-color:#e3c96b; }
+    .badge.high   { background:#e7f4e8; color:var(--ok); border-color:#9ccb9f; }
+    .flag-note { color:var(--warn-ink); font-weight:600; margin:.5rem 0 0; }
+    pre { background:#f7f7f7; border:1px solid var(--line); border-radius:6px;
+          padding:.75rem; overflow-x:auto; font-size:.8rem; max-height:22rem; }
+    button { font:inherit; padding:.55rem 1rem; border-radius:6px; border:1px solid var(--ink);
+             background:var(--ink); color:#fff; cursor:pointer; }
+    button.secondary { background:#fff; color:var(--ink); }
+    .filename { font-weight:600; }
+    .muted { color:var(--muted); font-size:.85rem; }
+    .blocked { border:1px solid var(--bad-line); background:var(--bad-bg); padding:.9rem; border-radius:6px; }
+  </style>
+</head>
+<body>
+  <h1>{% block heading %}{% endblock %}</h1>
+  <p class="sub">Run #{{ run.pk }} — {{ run.get_current_stage_display }}</p>
+
+  {% if messages %}{% for m in messages %}
+    <p class="msg {{ m.tags }}">{{ m }}</p>
+  {% endfor %}{% endif %}
+
+  {% if blocked %}<p class="blocked">{{ blocked }}</p>{% endif %}
+
+  {% block content %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,27 @@
+{% extends "candidates/base.html" %}
+{% block title %}Upload CVs{% endblock %}
+{% block heading %}Upload CVs{% endblock %}
+
+{% block content %}
+  <p>PDF and DOCX only. Scanned documents with no text layer are rejected — there is no OCR in v1.</p>
+
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <p><input type="file" name="cvs" multiple accept=".pdf,.docx" {% if blocked %}disabled{% endif %}></p>
+    <button type="submit" {% if blocked %}disabled{% endif %}>Validate and add to run</button>
+  </form>
+  <p class="muted">Uploading only validates. Nothing is sent to the LLM until you press
+     &ldquo;Structure&rdquo; on the review page.</p>
+
+  {% if candidates %}
+    <h2>Already in this run ({{ candidates|length }})</h2>
+    {% for c in candidates %}
+      <div class="card {% if c.status == 'rejected' or c.status == 'duplicate' %}rejected{% endif %}">
+        <span class="filename">{{ c.original_filename }}</span>
+        <span class="badge">{{ c.get_status_display }}</span>
+        {% if c.rejection_reason %}<p class="muted">{{ c.rejection_reason }}</p>{% endif %}
+      </div>
+    {% endfor %}
+    <p><a href="{% url 'candidates:review' run.pk %}">Go to the review checkpoint &rarr;</a></p>
+  {% endif %}
+{% endblock %}

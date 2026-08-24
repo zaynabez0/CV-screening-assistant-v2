@@ -1,0 +1,27 @@
+Nadia Cherkaoui
+Software Engineer
+nadia.cherkaoui@example.com | +212 6 00 00 00 00 | Casablanca, Morocco
+
+PROFILE
+Backend engineer with 6 years of professional experience across fintech and logistics.
+
+EXPERIENCE
+
+Senior Backend Engineer, Kite Logistics
+March 2023 - Present
+Design and maintain the shipment tracking API serving 40k requests/minute.
+Led the migration from a monolith to four bounded services.
+
+Backend Engineer, Numera Finance
+June 2017 - January 2020
+Built the payment reconciliation service in Python and PostgreSQL.
+Owned the nightly settlement batch job.
+
+EDUCATION
+MSc Software Engineering, Universite Hassan II, 2017
+
+SKILLS
+Python, Django, PostgreSQL, Redis, Docker, Kubernetes, REST APIs
+
+LANGUAGES
+Arabic (native), French (fluent), English (professional)

@@ -1,0 +1,86 @@
+Sofia Marchetti
+Principal Software Engineer
+sofia.marchetti@example.com | +39 340 000 0000 | Milan, Italy
+
+PROFILE
+Principal engineer with 14 years across advertising, retail and platform infrastructure. Track record of leading multi-team technical programmes.
+
+EXPERIENCE
+
+Principal Engineer, Halcyon Systems
+January 2022 - Present
+Own the platform architecture across six product teams; chair the design review board.
+Collaborated with product, SRE and data teams on quarterly planning.
+Mentored engineers through promotion and onboarding.
+
+Staff Engineer, Halcyon Systems
+March 2020 - January 2022
+Led the multi-region failover programme; cut p99 checkout latency by 340ms.
+Collaborated with product, SRE and data teams on quarterly planning.
+Mentored engineers through promotion and onboarding.
+
+Senior Software Engineer, Brightline Retail
+June 2018 - February 2020
+Rebuilt the inventory sync service handling 12M SKU updates per day.
+Collaborated with product, SRE and data teams on quarterly planning.
+Mentored engineers through promotion and onboarding.
+
+Software Engineer, Brightline Retail
+August 2016 - May 2018
+Maintained the order management monolith; introduced contract testing.
+Collaborated with product, SRE and data teams on quarterly planning.
+Mentored engineers through promotion and onboarding.
+
+Backend Developer, Vantage Media
+September 2014 - July 2016
+Built the ad-serving bidder in Go, serving 90k QPS at peak.
+Collaborated with product, SRE and data teams on quarterly planning.
+Mentored engineers through promotion and onboarding.
+
+Backend Developer, Corvid Labs
+October 2012 - August 2014
+Developed internal billing tooling in Python and Django.
+Collaborated with product, SRE and data teams on quarterly planning.
+Mentored engineers through promotion and onboarding.
+
+Junior Developer, Corvid Labs
+July 2011 - September 2012
+Supported the reporting suite; wrote the first automated test harness.
+Collaborated with product, SRE and data teams on quarterly planning.
+Mentored engineers through promotion and onboarding.
+
+Intern, Software Engineering, Northgate Telecom
+February 2011 - June 2011
+Prototyped a network-usage dashboard used by the NOC team.
+Collaborated with product, SRE and data teams on quarterly planning.
+Mentored engineers through promotion and onboarding.
+
+EDUCATION
+MSc Computer Engineering, Politecnico di Milano, 2011
+BSc Computer Engineering, Politecnico di Milano, 2009
+
+CERTIFICATIONS
+Certification 1: AWS Solutions Architect Professional
+Certification 2: CKA Certified Kubernetes Administrator
+Certification 3: Google Cloud Professional Architect
+Certification 4: HashiCorp Terraform Associate
+
+SKILLS
+Python, Go, Java, Kubernetes, Terraform, AWS, GCP, PostgreSQL, Kafka, Redis, gRPC, distributed systems, observability, incident command
+
+PUBLICATIONS AND TALKS
+Talk 1: scaling lessons from a multi-region migration, conference track 1.
+Talk 2: scaling lessons from a multi-region migration, conference track 2.
+Talk 3: scaling lessons from a multi-region migration, conference track 3.
+Talk 4: scaling lessons from a multi-region migration, conference track 4.
+Talk 5: scaling lessons from a multi-region migration, conference track 5.
+Talk 6: scaling lessons from a multi-region migration, conference track 6.
+Talk 7: scaling lessons from a multi-region migration, conference track 7.
+Talk 8: scaling lessons from a multi-region migration, conference track 8.
+Talk 9: scaling lessons from a multi-region migration, conference track 9.
+Talk 10: scaling lessons from a multi-region migration, conference track 10.
+Talk 11: scaling lessons from a multi-region migration, conference track 11.
+Talk 12: scaling lessons from a multi-region migration, conference track 12.
+
+LANGUAGES
+Italian (native), English (fluent), French (professional)
