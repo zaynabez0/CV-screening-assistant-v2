@@ -15,7 +15,7 @@ from django.urls import reverse
 from candidates.models import Candidate
 from jobs.models import JobDescription
 from runs.models import ScreeningRun, StageResult
-from runs.services import StageNotReady, run_stage1, run_stage2
+from runs.services import StageNotReady, run_stage1, run_stage2, run_stage3
 
 pytestmark = pytest.mark.django_db
 
@@ -723,3 +723,394 @@ def test_cannot_confirm_stage2_before_it_has_run(client, ranked_run):
 
     ranked_run.refresh_from_db()
     assert ranked_run.current_stage == "stage2_pending"
+
+
+# =============================================================================
+# Stage 3 — scoring
+# =============================================================================
+
+INFERRED = {"requirement": "Team leadership", "description": "Implied by seniority",
+            "type": "inferred", "scale": "5=led teams, 3=mentored, 1=none", "suggested_weight": 1}
+# Stage 2's NICE_TO_HAVE carries weight 0.5; Stage 3 uses 3 so the normalized weights
+# are 0.75 / 0.25 and every expected score below can be checked by hand.
+KUBERNETES = {**NICE_TO_HAVE, "suggested_weight": 3}
+
+
+def stage3_run(requirements=None, **kwargs):
+    jd = JobDescription.objects.create(
+        input_mode="text", raw_text="Backend engineer.",
+        requirements=requirements if requirements is not None else [MUST_HAVE, KUBERNETES, INFERRED],
+        confirmed_by_user=True,
+    )
+    defaults = {"job_description": jd, "current_stage": "stage3_pending"}
+    defaults.update(kwargs)
+    return ScreeningRun.objects.create(**defaults)
+
+
+def rank_stage2(run, candidate, rank, final_score=0.5):
+    return StageResult.objects.create(
+        run=run, candidate=candidate, stage="stage2", passed=None,
+        output_json={"semantic_score": final_score, "keyword_score": final_score,
+                     "final_score": final_score, "rank": rank, "keywords_used": []},
+    )
+
+
+@pytest.fixture
+def scored_run():
+    """A run at stage3_pending with four Stage 2-ranked candidates (25% cutoff -> 1)."""
+    run = stage3_run()
+    for index, name in enumerate(("a.pdf", "b.pdf", "c.pdf", "d.pdf"), start=1):
+        rank_stage2(run, add_candidate(run, name), rank=index, final_score=1.0 - index / 10)
+    return run
+
+
+def criterion_scores(kubernetes=4, leadership=2, confidence="high"):
+    return [
+        {"criterion": "Kubernetes", "score": kubernetes, "evidence_quote": "Ran clusters",
+         "reasoning": "Operated Kubernetes.", "confidence": confidence},
+        {"criterion": "Team leadership", "score": leadership, "evidence_quote": "Led six engineers",
+         "reasoning": "Led a small team.", "confidence": confidence},
+    ]
+
+
+# --- Running the stage ------------------------------------------------------------
+
+def test_stage3_scores_only_the_stage2_shortlist(scored_run):
+    """Four ranked candidates, 25% cutoff -> only the top one is scored. Stage 3 is the
+    expensive stage; that is the whole point of Stage 2."""
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores()}) as mock:
+        summary = run_stage3(scored_run)
+
+    assert mock.call_count == 1
+    assert summary["scored"] == 1
+    result = StageResult.objects.get(run=scored_run, stage="stage3")
+    assert result.candidate.original_filename == "a.pdf"
+
+
+def test_raising_the_cutoff_widens_who_stage3_scores(scored_run):
+    scored_run.stage2_cutoff_percent = 75.0
+    scored_run.save()
+
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores()}) as mock:
+        run_stage3(scored_run)
+
+    assert mock.call_count == 3                       # ceil(4 * 0.75)
+
+
+def test_stage3_stores_the_aggregate_and_the_weights_that_produced_it(scored_run):
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores(4, 2)}):
+        run_stage3(scored_run)
+
+    output = StageResult.objects.get(run=scored_run, stage="stage3").output_json
+    # suggested weights 3 and 1 normalize to 0.75 / 0.25 -> (4*.75 + 2*.25)/5*100 = 70.0
+    assert output["final_score"] == 70.0
+    assert output["weights_used"] == {"Kubernetes": pytest.approx(0.75),
+                                      "Team leadership": pytest.approx(0.25)}
+    assert len(output["criterion_breakdown"]) == 2
+
+
+def test_saved_weights_are_used_instead_of_the_jd_suggestions(scored_run):
+    scored_run.rubric_weights = {"Kubernetes": 0.1, "Team leadership": 0.9}
+    scored_run.save()
+
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores(5, 1)}):
+        run_stage3(scored_run)
+
+    output = StageResult.objects.get(run=scored_run, stage="stage3").output_json
+    assert output["final_score"] == pytest.approx(28.0)     # (5*.1 + 1*.9)/5*100
+
+
+def test_stage3_results_have_no_pass_fail(scored_run):
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores()}):
+        run_stage3(scored_run)
+
+    assert StageResult.objects.get(run=scored_run, stage="stage3").passed is None
+
+
+def test_stage3_sends_anonymized_candidates(scored_run):
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores()}) as mock:
+        run_stage3(scored_run)
+
+    sent = mock.call_args.args[1]
+    assert "Amina Benali" not in sent and "example.com" not in sent
+
+
+def test_low_confidence_scores_are_flagged_on_the_result(scored_run):
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores(confidence="low")}):
+        run_stage3(scored_run)
+
+    output = StageResult.objects.get(run=scored_run, stage="stage3").output_json
+    assert output["low_confidence_flags"] == ["Kubernetes", "Team leadership"]
+
+
+def test_a_mis_named_criterion_is_recorded_not_fatal(scored_run):
+    bad = criterion_scores() + [{"criterion": "K8s administration", "score": 5,
+                                 "evidence_quote": "q", "reasoning": "r", "confidence": "high"}]
+
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": bad}):
+        summary = run_stage3(scored_run)
+
+    output = StageResult.objects.get(run=scored_run, stage="stage3").output_json
+    assert output["unknown_criteria"] == ["K8s administration"]
+    assert output["final_score"] == 70.0
+    assert summary["anomalies"] == 1
+
+
+def test_rerunning_stage3_replaces_the_previous_scores(scored_run):
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores(4, 2)}):
+        run_stage3(scored_run)
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores(5, 5)}):
+        run_stage3(scored_run)
+
+    results = StageResult.objects.filter(run=scored_run, stage="stage3")
+    assert results.count() == 1
+    assert results.first().output_json["final_score"] == 100.0
+
+
+# --- The empty-rubric edge case ------------------------------------------------------
+
+def test_a_must_have_only_jd_blocks_stage3_with_a_skip_instruction():
+    run = stage3_run(requirements=[MUST_HAVE])
+    rank_stage2(run, add_candidate(run, "cv.pdf"), rank=1)
+
+    with pytest.raises(StageNotReady, match="nothing .* to score|Skip Stage 3"):
+        run_stage3(run)
+
+
+def test_skipping_stage3_advances_to_final_review(client):
+    """The specified handling: Stage 2's ranking stands as the final order."""
+    run = stage3_run(requirements=[MUST_HAVE])
+    rank_stage2(run, add_candidate(run, "cv.pdf"), rank=1)
+
+    client.post(reverse("runs:stage3_skip", args=[run.pk]))
+
+    run.refresh_from_db()
+    assert run.current_stage == "review"
+    assert StageResult.objects.filter(run=run, stage="stage3").count() == 0
+
+
+def test_the_stage2_ranking_survives_the_skip(client):
+    run = stage3_run(requirements=[MUST_HAVE])
+    first = add_candidate(run, "first.pdf")
+    second = add_candidate(run, "second.pdf")
+    rank_stage2(run, first, rank=1, final_score=0.9)
+    rank_stage2(run, second, rank=2, final_score=0.4)
+
+    client.post(reverse("runs:stage3_skip", args=[run.pk]))
+
+    ranking = list(StageResult.objects.filter(run=run, stage="stage2")
+                   .order_by("output_json__rank").values_list("candidate__original_filename", flat=True))
+    assert ranking == ["first.pdf", "second.pdf"]
+
+
+def test_a_jd_with_criteria_cannot_be_skipped(client, scored_run):
+    """Skipping is only for the empty-rubric case — it must not become a way to
+    bypass scoring on a JD that has scorable criteria."""
+    client.post(reverse("runs:stage3_skip", args=[scored_run.pk]))
+
+    scored_run.refresh_from_db()
+    assert scored_run.current_stage == "stage3_pending"
+
+
+def test_the_empty_rubric_page_offers_the_skip_and_hides_the_weight_editor(client):
+    run = stage3_run(requirements=[MUST_HAVE])
+    rank_stage2(run, add_candidate(run, "cv.pdf"), rank=1)
+
+    response = client.get(reverse("runs:stage3_review", args=[run.pk]))
+    html = response.content.decode()
+
+    assert response.context["rubric_empty"] is True
+    assert "no nice-to-have or inferred requirements" in html
+    assert "Skip Stage 3" in html
+    assert "Criterion weights" not in html
+
+
+# --- Preconditions ----------------------------------------------------------------------
+
+def test_stage3_refuses_at_the_wrong_stage(scored_run):
+    scored_run.current_stage = "stage2_pending"
+    scored_run.save()
+
+    with pytest.raises(StageNotReady, match="not ready for Stage 3"):
+        run_stage3(scored_run)
+
+
+def test_stage3_refuses_when_nobody_is_above_the_cutoff():
+    run = stage3_run()
+
+    with pytest.raises(StageNotReady, match="above the Stage 2 cutoff"):
+        run_stage3(run)
+
+
+def test_stage3_command_records_failure_rather_than_hanging(scored_run):
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               side_effect=RuntimeError("API down")):
+        with pytest.raises(RuntimeError):
+            call_command("run_stage3", scored_run.pk)
+
+    scored_run.refresh_from_db()
+    assert scored_run.job_status == "failed"
+    assert "API down" in scored_run.job_message
+
+
+# --- The weight-adjustment checkpoint -------------------------------------------------------
+
+def test_the_checkpoint_prefills_the_jd_suggested_weights(client, scored_run):
+    context = client.get(reverse("runs:stage3_review", args=[scored_run.pk])).context
+
+    assert [c["requirement"] for c in context["rubric"]] == ["Kubernetes", "Team leadership"]
+    assert [c["weight"] for c in context["rubric"]] == pytest.approx([0.75, 0.25])
+
+
+def test_must_have_requirements_are_absent_from_the_checkpoint(client, scored_run):
+    context = client.get(reverse("runs:stage3_review", args=[scored_run.pk])).context
+
+    assert "5+ years Python" not in [c["requirement"] for c in context["rubric"]]
+
+
+def test_saving_weights_stores_them_on_the_run(client, scored_run):
+    client.post(reverse("runs:stage3_weights", args=[scored_run.pk]),
+                {"weight::Kubernetes": "0.6", "weight::Team leadership": "0.4"})
+
+    scored_run.refresh_from_db()
+    assert scored_run.rubric_weights == {"Kubernetes": 0.6, "Team leadership": 0.4}
+
+
+def test_weights_that_do_not_sum_to_one_are_flagged_as_normalized(client, scored_run):
+    client.post(reverse("runs:stage3_weights", args=[scored_run.pk]),
+                {"weight::Kubernetes": "8", "weight::Team leadership": "2"})
+
+    response = client.get(reverse("runs:stage3_review", args=[scored_run.pk]))
+
+    assert response.context["normalized"] is True
+    assert "normalized to 1.0" in response.content.decode()
+    assert [c["weight"] for c in response.context["rubric"]] == pytest.approx([0.8, 0.2])
+
+
+def test_a_negative_weight_is_rejected(client, scored_run):
+    client.post(reverse("runs:stage3_weights", args=[scored_run.pk]),
+                {"weight::Kubernetes": "-1", "weight::Team leadership": "0.4"})
+
+    scored_run.refresh_from_db()
+    assert scored_run.rubric_weights == {}
+
+
+def test_a_non_numeric_weight_is_rejected(client, scored_run):
+    client.post(reverse("runs:stage3_weights", args=[scored_run.pk]),
+                {"weight::Kubernetes": "heavy", "weight::Team leadership": "0.4"})
+
+    scored_run.refresh_from_db()
+    assert scored_run.rubric_weights == {}
+
+
+def test_zeroing_every_weight_warns_and_scores_equally(client, scored_run):
+    client.post(reverse("runs:stage3_weights", args=[scored_run.pk]),
+                {"weight::Kubernetes": "0", "weight::Team leadership": "0"})
+    scored_run.refresh_from_db()
+
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores(5, 1)}):
+        run_stage3(scored_run)
+
+    output = StageResult.objects.get(run=scored_run, stage="stage3").output_json
+    assert output["weights_used"] == {"Kubernetes": pytest.approx(0.5),
+                                      "Team leadership": pytest.approx(0.5)}
+    assert output["final_score"] == pytest.approx(60.0)      # (5*.5 + 1*.5)/5*100
+
+
+def test_resetting_weights_restores_the_suggestions(client, scored_run):
+    scored_run.rubric_weights = {"Kubernetes": 0.99}
+    scored_run.save()
+
+    client.post(reverse("runs:stage3_weights_reset", args=[scored_run.pk]))
+
+    scored_run.refresh_from_db()
+    assert scored_run.rubric_weights == {}
+
+
+# --- Results display and confirm gate ----------------------------------------------------------
+
+def test_review_shows_every_criterion_score_with_its_evidence(client, scored_run):
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores()}):
+        run_stage3(scored_run)
+
+    html = client.get(reverse("runs:stage3_review", args=[scored_run.pk])).content.decode()
+
+    assert "70.0" in html
+    assert "Ran clusters" in html and "Led six engineers" in html      # evidence quotes
+    assert "Operated Kubernetes." in html                               # reasoning
+
+
+def test_review_flags_low_confidence_scores_visually(client, scored_run):
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores(confidence="low")}):
+        run_stage3(scored_run)
+
+    response = client.get(reverse("runs:stage3_review", args=[scored_run.pk]))
+
+    assert response.context["low_confidence_total"] == 2
+    assert "low-confidence" in response.content.decode()
+
+
+def test_review_orders_candidates_by_final_score(client, scored_run):
+    scored_run.stage2_cutoff_percent = 100.0
+    scored_run.save()
+    payloads = [
+        {"criterion_scores": criterion_scores(1, 1)},
+        {"criterion_scores": criterion_scores(5, 5)},
+        {"criterion_scores": criterion_scores(3, 3)},
+        {"criterion_scores": criterion_scores(2, 2)},
+    ]
+    with patch("screening.stage3_scoring.scoring.call_structured", side_effect=payloads):
+        run_stage3(scored_run)
+
+    context = client.get(reverse("runs:stage3_review", args=[scored_run.pk])).context
+
+    assert [r.output_json["final_score"] for r in context["results"]] == [100.0, 60.0, 40.0, 20.0]
+
+
+def test_confirming_stage3_advances_to_final_review(client, scored_run):
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores()}):
+        run_stage3(scored_run)
+
+    client.post(reverse("runs:stage3_confirm", args=[scored_run.pk]))
+
+    scored_run.refresh_from_db()
+    assert scored_run.current_stage == "review"
+
+
+def test_running_stage3_alone_does_not_advance_the_run(scored_run):
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores()}):
+        run_stage3(scored_run)
+
+    scored_run.refresh_from_db()
+    assert scored_run.current_stage == "stage3_pending"
+
+
+def test_cannot_confirm_stage3_before_it_has_run(client, scored_run):
+    client.post(reverse("runs:stage3_confirm", args=[scored_run.pk]))
+
+    scored_run.refresh_from_db()
+    assert scored_run.current_stage == "stage3_pending"
+
+
+def test_start_launches_the_stage3_command_in_a_subprocess(client, scored_run):
+    with patch("runs.views.subprocess.Popen") as popen:
+        client.post(reverse("runs:stage3_start", args=[scored_run.pk]))
+
+    assert popen.call_args.args[0][1:] == ["manage.py", "run_stage3", str(scored_run.pk)]
+    scored_run.refresh_from_db()
+    assert scored_run.job_status == "running"

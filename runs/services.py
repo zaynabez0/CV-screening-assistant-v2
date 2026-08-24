@@ -8,6 +8,9 @@ from candidates.models import Candidate
 from screening.cv.anonymization import anonymize_candidate
 from screening.stage1_hard_filter.evaluation import evaluate_hard_filters, select_must_have
 from screening.stage2_ranking.ranking import score_breakdown, shortlist_size
+from screening.stage3_scoring.aggregation import aggregate_score
+from screening.stage3_scoring.rubric import apply_user_weights, build_rubric, rubric_is_empty
+from screening.stage3_scoring.scoring import score_candidate
 
 from .models import StageResult
 
@@ -136,3 +139,80 @@ def run_stage2(run) -> dict:
         f"{run.stage2_cutoff_percent:g}% cutoff, {shortlisted} would go to Stage 3."
     )
     return {"ranked": len(survivors), "shortlisted": shortlisted, "keywords_used": keywords}
+
+
+def stage2_shortlist(run) -> list:
+    """The candidates above the Stage 2 cutoff, best-ranked first.
+
+    Derived from the stored ranking and the run's current cutoff rather than frozen at
+    Stage 2 time, so moving the cutoff changes who Stage 3 scores without a re-rank.
+    """
+    ranked = list(
+        StageResult.objects.filter(run=run, stage="stage2")
+        .select_related("candidate")
+        .order_by("output_json__rank")
+    )
+    cut = shortlist_size(len(ranked), run.stage2_cutoff_percent)
+    return [r.candidate for r in ranked[:cut]]
+
+
+def stage3_preflight(run) -> list:
+    """Everything that must be true before Stage 3 may run. Returns the shortlist."""
+    if run.current_stage != "stage3_pending":
+        raise StageNotReady(
+            f"Run is at '{run.get_current_stage_display()}', not ready for Stage 3."
+        )
+    if not run.job_description.confirmed_by_user:
+        raise StageNotReady("The job description's requirements have not been confirmed yet.")
+    if rubric_is_empty(run.job_description.requirements):
+        raise StageNotReady(
+            "This JD has no nice-to-have or inferred requirements, so there is nothing "
+            "to score. Skip Stage 3 and let the Stage 2 ranking stand as the final order."
+        )
+
+    shortlist = stage2_shortlist(run)
+    if not shortlist:
+        raise StageNotReady("No candidates are above the Stage 2 cutoff.")
+    return shortlist
+
+
+def weighted_rubric_for(run) -> list:
+    """The rubric with the recruiter's confirmed weights applied.
+
+    `rubric_weights` holds {requirement: weight}; anything absent falls back to the
+    JD's suggested weight, and apply_user_weights normalizes the result.
+    """
+    rubric = build_rubric(run.job_description.requirements)
+    return apply_user_weights(rubric, run.rubric_weights or {})
+
+
+def run_stage3(run) -> dict:
+    """Score the Stage 2 shortlist per criterion, then aggregate deterministically."""
+    shortlist = stage3_preflight(run)
+    weighted = weighted_rubric_for(run)
+
+    run.mark_job_started("stage3", total=len(shortlist))
+    StageResult.objects.filter(run=run, stage="stage3").delete()
+
+    anomalies = 0
+    for index, candidate in enumerate(shortlist, start=1):
+        anon = anonymize_candidate(candidate.extracted_json)
+        criterion_scores = score_candidate(anon, weighted)
+        aggregated = aggregate_score(criterion_scores, weighted)
+
+        StageResult.objects.create(
+            run=run,
+            candidate=candidate,
+            stage="stage3",
+            passed=None,  # scoring is not a gate — the recruiter reads the ranking
+            output_json={
+                **aggregated,
+                "weights_used": {c["requirement"]: c["weight"] for c in weighted},
+            },
+        )
+        anomalies += bool(aggregated["unknown_criteria"] or aggregated["unscored_criteria"])
+        run.mark_job_progress(index)
+
+    note = f" {anomalies} had criteria the model mis-named or skipped." if anomalies else ""
+    run.mark_job_finished(f"Stage 3 complete: {len(shortlist)} candidate(s) scored.{note}")
+    return {"scored": len(shortlist), "anomalies": anomalies}

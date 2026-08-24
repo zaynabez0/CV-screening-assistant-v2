@@ -1,0 +1,160 @@
+{% extends "candidates/base.html" %}
+{% block title %}Stage 3 review{% endblock %}
+{% block heading %}Stage 3 — scoring{% endblock %}
+
+{% block content %}
+
+{% if rubric_empty %}
+  <p class="msg warning"><strong>This JD has no nice-to-have or inferred requirements.</strong>
+     There is nothing for Stage 3 to score — every requirement was already gated pass/fail
+     in Stage 1.</p>
+  <p>Skip Stage 3 and let the Stage 2 ranking stand as the final order.</p>
+  {% if run.current_stage == "stage3_pending" %}
+    <form method="post" action="{% url 'runs:stage3_skip' run.pk %}">
+      {% csrf_token %}
+      <button type="submit">Skip Stage 3 and go to Final Review</button>
+    </form>
+  {% else %}
+    <p class="msg success">Stage 3 was skipped. The Stage 2 ranking is the final order.</p>
+  {% endif %}
+
+{% else %}
+
+  <p>Each shortlisted candidate is scored 1–5 per criterion with a quoted evidence line.
+     The weighted total is computed in Python, not by the model.</p>
+
+  {% if run.job_status == "running" %}
+    <div class="card" id="job-panel">
+      <p><strong>Stage 3 is running…</strong>
+         <span id="job-progress">{{ run.job_processed }} / {{ run.job_total }}</span></p>
+      <p class="muted">One scoring call per candidate.</p>
+    </div>
+  {% elif run.job_status == "failed" and run.job_stage == "stage3" %}
+    <p class="msg error"><strong>Stage 3 failed:</strong> {{ run.job_message }}</p>
+  {% elif run.job_status == "done" and run.job_stage == "stage3" %}
+    <p class="msg success">{{ run.job_message }}</p>
+  {% endif %}
+
+  <h2>Criterion weights</h2>
+  <p class="muted">Pre-filled from the JD's suggested weights. Adjust before running —
+     this is the lever that decides what the final score actually measures.</p>
+
+  {% if normalized %}
+    <p class="msg warning">Your weights total {{ raw_total|floatformat:2 }}, so they are
+       <strong>normalized to 1.0</strong> before scoring. The relative proportions below
+       are what count.</p>
+  {% endif %}
+
+  <form method="post" action="{% url 'runs:stage3_weights' run.pk %}">
+    {% csrf_token %}
+    <table>
+      <thead><tr><th>Criterion</th><th>Type</th><th>Scale</th><th>Weight</th></tr></thead>
+      <tbody>
+        {% for c in rubric %}
+          <tr>
+            <td><strong>{{ c.requirement }}</strong><br><span class="muted">{{ c.description }}</span></td>
+            <td><span class="badge">{{ c.type }}</span></td>
+            <td class="muted">{{ c.scale }}</td>
+            <td>
+              <input type="number" name="weight::{{ c.requirement }}" min="0" max="1" step="0.01"
+                     value="{{ c.weight|floatformat:'-3' }}"
+                     {% if run.current_stage != "stage3_pending" %}disabled{% endif %}>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p>
+      <button type="submit" {% if run.current_stage != "stage3_pending" %}disabled{% endif %}>Save weights</button>
+    </p>
+  </form>
+  <form method="post" action="{% url 'runs:stage3_weights_reset' run.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="secondary"
+            {% if run.current_stage != "stage3_pending" %}disabled{% endif %}>Reset to the JD's suggestions</button>
+  </form>
+
+  {% if run.job_status != "running" %}
+    <form method="post" action="{% url 'runs:stage3_start' run.pk %}" style="margin-top:1rem">
+      {% csrf_token %}
+      <button type="submit" {% if blocked %}disabled{% endif %}>
+        {% if has_results %}Re-run Stage 3{% else %}Score {{ shortlist|length }} shortlisted candidate(s){% endif %}
+      </button>
+    </form>
+  {% endif %}
+
+  {% if has_results %}
+    {% if low_confidence_total %}
+      <p class="msg warning"><strong>{{ low_confidence_total }} low-confidence criterion
+         score(s)</strong> across the results — flagged below. The model found no solid
+         evidence for these.</p>
+    {% endif %}
+
+    <h2>Scored candidates ({{ results|length }})</h2>
+    {% for r in results %}
+      <div class="card {% if r.output_json.low_confidence_flags %}flagged{% endif %}">
+        <p>
+          <span class="filename">{{ r.candidate.original_filename }}</span>
+          <span class="badge high">{{ r.output_json.final_score|floatformat:1 }} / 100</span>
+          {% if r.output_json.low_confidence_flags %}
+            <span class="badge low">{{ r.output_json.low_confidence_flags|length }} low-confidence</span>
+          {% endif %}
+        </p>
+
+        {% if r.output_json.unknown_criteria or r.output_json.unscored_criteria %}
+          <p class="flag-note">&#9888;
+            {% if r.output_json.unknown_criteria %}Model returned unrecognised criteria:
+              {{ r.output_json.unknown_criteria|join:", " }}.{% endif %}
+            {% if r.output_json.unscored_criteria %}Not scored:
+              {{ r.output_json.unscored_criteria|join:", " }} (counted as no evidence).{% endif %}
+          </p>
+        {% endif %}
+
+        <table>
+          <thead><tr><th>Criterion</th><th>Score</th><th>Confidence</th><th>Evidence / reasoning</th></tr></thead>
+          <tbody>
+            {% for cs in r.output_json.criterion_breakdown %}
+              <tr class="{% if cs.confidence == 'low' %}row-unmet{% endif %}">
+                <td>{{ cs.criterion }}</td>
+                <td><strong>{{ cs.score }}</strong> / 5</td>
+                <td><span class="badge {{ cs.confidence }}">{{ cs.confidence }}</span></td>
+                <td>
+                  {% if cs.evidence_quote %}<q>{{ cs.evidence_quote }}</q><br>{% endif %}
+                  <span class="muted">{{ cs.reasoning }}</span>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endfor %}
+
+    {% if run.current_stage == "stage3_pending" and run.job_status != "running" %}
+      <h2>Confirm</h2>
+      <p>Confirming carries these scores into Final Review. Nothing runs automatically.</p>
+      <form method="post" action="{% url 'runs:stage3_confirm' run.pk %}">
+        {% csrf_token %}
+        <button type="submit">Confirm Stage 3 and continue</button>
+      </form>
+    {% endif %}
+  {% elif run.job_status != "running" %}
+    <p class="muted">Stage 3 has not run yet for this run.</p>
+  {% endif %}
+
+  {% if run.job_status == "running" %}
+  <script>
+    const statusUrl = "{% url 'runs:job_status' run.pk %}";
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch(statusUrl, {headers: {"X-Requested-With": "fetch"}});
+        const data = await r.json();
+        const el = document.getElementById("job-progress");
+        if (el) el.textContent = data.processed + " / " + data.total;
+        if (data.status !== "running") { clearInterval(poll); location.reload(); }
+      } catch (e) { /* transient failure — the next tick retries */ }
+    }, 2000);
+  </script>
+  {% endif %}
+
+{% endif %}
+{% endblock %}

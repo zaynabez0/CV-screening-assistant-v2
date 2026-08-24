@@ -14,4 +14,10 @@ urlpatterns = [
     path("run/<int:run_id>/stage2/reseed/", views.reseed_stage2_keywords, name="stage2_reseed"),
     path("run/<int:run_id>/stage2/start/", views.start_stage2, name="stage2_start"),
     path("run/<int:run_id>/stage2/confirm/", views.confirm_stage2, name="stage2_confirm"),
+    path("run/<int:run_id>/stage3/review/", views.stage3_review, name="stage3_review"),
+    path("run/<int:run_id>/stage3/weights/", views.save_stage3_weights, name="stage3_weights"),
+    path("run/<int:run_id>/stage3/weights/reset/", views.reset_stage3_weights, name="stage3_weights_reset"),
+    path("run/<int:run_id>/stage3/start/", views.start_stage3, name="stage3_start"),
+    path("run/<int:run_id>/stage3/skip/", views.skip_stage3, name="stage3_skip"),
+    path("run/<int:run_id>/stage3/confirm/", views.confirm_stage3, name="stage3_confirm"),
 ]

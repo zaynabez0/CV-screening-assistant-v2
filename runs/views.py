@@ -18,7 +18,15 @@ from .models import ScreeningRun, StageResult
 from screening.stage2_ranking.keywords import seed_keywords
 from screening.stage2_ranking.ranking import shortlist_size
 
-from .services import StageNotReady, stage1_preflight, stage2_preflight
+from screening.stage3_scoring.rubric import apply_user_weights, build_rubric, rubric_is_empty
+
+from .services import (
+    StageNotReady,
+    stage1_preflight,
+    stage2_preflight,
+    stage2_shortlist,
+    stage3_preflight,
+)
 
 
 def start_stage1(request, run_id):
@@ -290,3 +298,184 @@ def confirm_stage2(request, run_id):
     run.save(update_fields=["current_stage", "job_status"])
     messages.success(request, f"Stage 2 confirmed. {shortlisted} candidate(s) continue to Stage 3.")
     return redirect("runs:stage2_review", run_id=run.pk)
+
+
+# --- Stage 3 ------------------------------------------------------------------
+
+def stage3_review(request, run_id):
+    """The Stage 3 checkpoint: set criterion weights, run scoring, read the results.
+
+    When the JD has no nice-to-have or inferred requirements the rubric is empty; the
+    page then offers to skip Stage 3 and let Stage 2's ranking stand as the final order.
+    """
+    run = get_object_or_404(ScreeningRun, pk=run_id)
+
+    rubric = build_rubric(run.job_description.requirements)
+    weighted = apply_user_weights(rubric, run.rubric_weights or {}) if rubric else []
+
+    # Surface the normalization CLAUDE.md asks to be "surfaced to the user".
+    raw_total = sum(
+        (run.rubric_weights or {}).get(c["requirement"], c["suggested_weight"]) for c in rubric
+    )
+    normalized = bool(rubric) and abs(raw_total - 1.0) > 0.01
+
+    results = list(
+        StageResult.objects.filter(run=run, stage="stage3")
+        .select_related("candidate")
+        .order_by("-output_json__final_score")
+    )
+
+    try:
+        stage3_preflight(run)
+    except StageNotReady as exc:
+        blocked = str(exc)
+    else:
+        blocked = None
+
+    return render(request, "runs/stage3_review.html", {
+        "run": run,
+        "rubric": weighted,
+        "rubric_empty": not rubric,
+        "normalized": normalized,
+        "raw_total": raw_total,
+        "results": results,
+        "shortlist": stage2_shortlist(run),
+        "low_confidence_total": sum(len(r.output_json.get("low_confidence_flags", [])) for r in results),
+        "blocked": blocked,
+        "has_results": bool(results),
+    })
+
+
+def save_stage3_weights(request, run_id):
+    """POST-only. Stores {requirement: weight} on the run before scoring runs."""
+    run = get_object_or_404(ScreeningRun, pk=run_id)
+    if request.method != "POST":
+        return redirect("runs:stage3_review", run_id=run.pk)
+
+    if run.current_stage != "stage3_pending":
+        messages.error(request, f"Run is at '{run.get_current_stage_display()}', not Stage 3.")
+        return redirect("runs:stage3_review", run_id=run.pk)
+
+    weights = {}
+    for criterion in build_rubric(run.job_description.requirements):
+        name = criterion["requirement"]
+        raw = request.POST.get(f"weight::{name}", "").strip()
+        if raw == "":
+            continue
+        try:
+            value = float(raw)
+        except ValueError:
+            messages.error(request, f"'{raw}' is not a valid weight for “{name}”.")
+            return redirect("runs:stage3_review", run_id=run.pk)
+        if value < 0:
+            messages.error(request, f"Weights cannot be negative (“{name}”).")
+            return redirect("runs:stage3_review", run_id=run.pk)
+        weights[name] = value
+
+    run.rubric_weights = weights
+    run.save(update_fields=["rubric_weights"])
+
+    if weights and sum(weights.values()) <= 0:
+        messages.warning(request, "Every weight was zero — the criteria will be weighted equally.")
+    else:
+        messages.success(request, f"Saved weights for {len(weights)} criterion/criteria.")
+    return redirect("runs:stage3_review", run_id=run.pk)
+
+
+def reset_stage3_weights(request, run_id):
+    """POST-only. Drops the recruiter's weights back to the JD's suggestions."""
+    run = get_object_or_404(ScreeningRun, pk=run_id)
+    if request.method != "POST":
+        return redirect("runs:stage3_review", run_id=run.pk)
+
+    run.rubric_weights = {}
+    run.save(update_fields=["rubric_weights"])
+    messages.success(request, "Weights reset to the JD's suggested values.")
+    return redirect("runs:stage3_review", run_id=run.pk)
+
+
+def start_stage3(request, run_id):
+    """POST-only. Launches the Stage 3 job and returns straight away."""
+    run = get_object_or_404(ScreeningRun, pk=run_id)
+    if request.method != "POST":
+        return redirect("runs:stage3_review", run_id=run.pk)
+
+    if run.job_status == "running":
+        messages.info(request, "A job is already running for this run.")
+        return redirect("runs:stage3_review", run_id=run.pk)
+
+    try:
+        shortlist = stage3_preflight(run)
+    except StageNotReady as exc:
+        messages.error(request, str(exc))
+        return redirect("runs:stage3_review", run_id=run.pk)
+
+    run.mark_job_started("stage3", total=len(shortlist))
+
+    subprocess.Popen(
+        [sys.executable, "manage.py", "run_stage3", str(run.pk)],
+        cwd=str(settings.BASE_DIR),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    messages.success(request, f"Stage 3 started for {len(shortlist)} candidate(s).")
+    return redirect("runs:stage3_review", run_id=run.pk)
+
+
+def skip_stage3(request, run_id):
+    """POST-only. The empty-rubric path: advance to Final Review without scoring.
+
+    A JD stated entirely as hard requirements has nothing to score, so Stage 2's
+    ranking stands as the final order rather than an empty rubric breaking the
+    aggregation maths.
+    """
+    run = get_object_or_404(ScreeningRun, pk=run_id)
+    if request.method != "POST":
+        return redirect("runs:stage3_review", run_id=run.pk)
+
+    if run.current_stage != "stage3_pending":
+        messages.error(request, f"Run is at '{run.get_current_stage_display()}', not Stage 3.")
+        return redirect("runs:stage3_review", run_id=run.pk)
+
+    if not rubric_is_empty(run.job_description.requirements):
+        messages.error(
+            request,
+            "This JD has scorable criteria — run Stage 3 rather than skipping it.",
+        )
+        return redirect("runs:stage3_review", run_id=run.pk)
+
+    run.current_stage = "review"
+    run.job_status = "idle"
+    run.save(update_fields=["current_stage", "job_status"])
+    messages.success(
+        request,
+        "Stage 3 skipped: the JD has no scorable criteria, so the Stage 2 ranking is the final order.",
+    )
+    return redirect("runs:stage3_review", run_id=run.pk)
+
+
+def confirm_stage3(request, run_id):
+    """POST-only. The human decision point between Stage 3 and Final Review."""
+    run = get_object_or_404(ScreeningRun, pk=run_id)
+    if request.method != "POST":
+        return redirect("runs:stage3_review", run_id=run.pk)
+
+    if run.current_stage != "stage3_pending":
+        messages.error(request, f"Run is at '{run.get_current_stage_display()}', not Stage 3.")
+        return redirect("runs:stage3_review", run_id=run.pk)
+
+    if run.job_status == "running":
+        messages.error(request, "Stage 3 is still running — wait for it to finish.")
+        return redirect("runs:stage3_review", run_id=run.pk)
+
+    count = StageResult.objects.filter(run=run, stage="stage3").count()
+    if not count:
+        messages.error(request, "Run Stage 3 before confirming.")
+        return redirect("runs:stage3_review", run_id=run.pk)
+
+    run.current_stage = "review"
+    run.job_status = "idle"
+    run.save(update_fields=["current_stage", "job_status"])
+    messages.success(request, f"Stage 3 confirmed with {count} scored candidate(s). Final Review is now available.")
+    return redirect("runs:stage3_review", run_id=run.pk)
