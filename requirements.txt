@@ -1,0 +1,22 @@
+# Web framework (backend + frontend, Django only)
+django
+
+# LLM calls - OpenAI Responses API with Structured Outputs
+openai
+
+# Text extraction from PDF / DOCX
+pymupdf
+python-docx
+
+# Real file-type check via magic bytes (needs system libmagic installed)
+python-magic
+
+# Stage 2 - semantic ranking
+sentence-transformers
+numpy
+
+# Stage 2 - keyword matching
+rapidfuzz
+
+# Tests
+pytest-django
