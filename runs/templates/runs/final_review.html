@@ -1,0 +1,159 @@
+{% extends "candidates/base.html" %}
+{% block title %}Final review{% endblock %}
+{% block heading %}Final review{% endblock %}
+
+{% block content %}
+  <p>The complete outcome across every stage. <strong>Every candidate is listed</strong> —
+     including those filtered at Stage 1 or rejected at upload — with the reason for each
+     decision and the ability to reverse it. The tool ranks and recommends; it never
+     rejects anyone on its own.</p>
+
+  <p>
+    <a href="{% url 'runs:export_csv' run.pk %}"><button type="button">Export CSV (all {{ rows|length }} candidates)</button></a>
+    <span class="muted">Includes names and emails — treat the file as personal data.</span>
+  </p>
+
+  {% if stage3_skipped %}
+    <p class="msg warning">Stage 3 was skipped for this run (the JD had no scorable
+       criteria), so the order below is the <strong>Stage 2 ranking</strong>.</p>
+  {% endif %}
+
+  {% if low_confidence_rows %}
+    <p class="msg warning"><strong>{{ low_confidence_rows|length }} candidate(s) carry
+       low-confidence criterion scores.</strong> The model found no solid evidence for
+       those criteria — verify by hand before acting on their position.</p>
+  {% endif %}
+
+  {% if override_count %}
+    <p class="msg success">{{ override_count }} recruiter override(s) logged on this run.</p>
+  {% endif %}
+
+  <h2>Candidates ({{ rows|length }})</h2>
+
+  {% for row in rows %}
+    <div class="card {% if row.reinstated %}flagged{% elif row.low_confidence_flags %}flagged{% elif not row.stage3 %}rejected{% endif %}">
+      <p>
+        <strong>#{{ row.position }}</strong>
+        <span class="filename">{{ row.candidate.original_filename }}</span>
+        {% if row.effective_score is not None %}
+          <span class="badge high">{{ row.effective_score|floatformat:1 }} / 100</span>
+          {% if row.score_adjusted %}
+            <span class="badge low">score adjusted</span>
+            <span class="muted">(pipeline said {{ row.automated_score|floatformat:1 }})</span>
+          {% endif %}
+        {% endif %}
+        {% if row.reinstated %}<span class="badge low">reinstated</span>{% endif %}
+        <span class="badge">{{ row.outcome }}</span>
+      </p>
+
+      {% if row.low_confidence_flags %}
+        <p class="flag-note">&#9888; Low confidence on: {{ row.low_confidence_flags|join:", " }}</p>
+      {% endif %}
+
+      {# --- stage-by-stage history, present for every candidate --- #}
+      <details {% if row.stage3 or row.reinstated %}open{% endif %}>
+        <summary>Stage-by-stage history</summary>
+
+        <p class="muted"><strong>Preprocessing:</strong> {{ row.candidate.get_status_display }}
+           {% if row.candidate.rejection_reason %}— {{ row.candidate.rejection_reason }}{% endif %}
+           {% if row.candidate.extraction_confidence %}
+             (extraction confidence: {{ row.candidate.extraction_confidence }}){% endif %}</p>
+
+        {% if row.stage1 %}
+          <p><strong>Stage 1 — hard filter:</strong>
+             {% if row.stage1.passed %}<span class="badge high">passed</span>
+             {% else %}<span class="badge low">did not pass</span>{% endif %}</p>
+          <table>
+            <thead><tr><th>Requirement</th><th>Met</th><th>Evidence / reason</th></tr></thead>
+            <tbody>
+              {% for e in row.stage1.evaluations %}
+                <tr class="{% if not e.met %}row-unmet{% endif %}">
+                  <td>{{ e.requirement }}</td>
+                  <td>{% if e.met %}&#10003;{% else %}&#10007;{% endif %}</td>
+                  <td>{% if e.evidence %}<q>{{ e.evidence }}</q><br>{% endif %}
+                      <span class="muted">{{ e.reason }}</span></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="muted"><strong>Stage 1:</strong> not evaluated.</p>
+        {% endif %}
+
+        {% if row.stage2 %}
+          <p><strong>Stage 2 — ranking:</strong> rank {{ row.stage2_rank }},
+             combined {{ row.stage2.output_json.final_score|floatformat:3 }}
+             (semantic {{ row.stage2.output_json.semantic_score|floatformat:3 }},
+              keyword {{ row.stage2.output_json.keyword_score|floatformat:3 }})
+             {% if row.shortlisted %}<span class="badge high">above cutoff</span>
+             {% else %}<span class="badge">below cutoff</span>{% endif %}</p>
+        {% else %}
+          <p class="muted"><strong>Stage 2:</strong> not ranked.</p>
+        {% endif %}
+
+        {% if row.stage3 %}
+          <p><strong>Stage 3 — scoring:</strong></p>
+          <table>
+            <thead><tr><th>Criterion</th><th>Score</th><th>Confidence</th><th>Evidence / reasoning</th></tr></thead>
+            <tbody>
+              {% for cs in row.stage3.output_json.criterion_breakdown %}
+                <tr class="{% if cs.confidence == 'low' %}row-unmet{% endif %}">
+                  <td>{{ cs.criterion }}</td>
+                  <td><strong>{{ cs.score }}</strong> / 5</td>
+                  <td><span class="badge {{ cs.confidence }}">{{ cs.confidence }}</span></td>
+                  <td>{% if cs.evidence_quote %}<q>{{ cs.evidence_quote }}</q><br>{% endif %}
+                      <span class="muted">{{ cs.reasoning }}</span></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="muted"><strong>Stage 3:</strong> not scored.</p>
+        {% endif %}
+      </details>
+
+      {# --- the human intervention log --- #}
+      {% if row.overrides %}
+        <p><strong>Overrides</strong></p>
+        <ul>
+          {% for o in row.overrides %}
+            <li>{{ o.get_action_display }}
+              {% if o.adjusted_score is not None %}&rarr; {{ o.adjusted_score|floatformat:1 }}{% endif %}
+              — <q>{{ o.reason }}</q>
+              <span class="muted">by {{ o.performed_by.username }} on {{ o.created_at|date:"Y-m-d H:i" }}</span></li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      <details>
+        <summary>Override this candidate&rsquo;s outcome</summary>
+        {% if user.is_authenticated %}
+          <form method="post" action="{% url 'runs:create_override' run.pk %}">
+            {% csrf_token %}
+            <input type="hidden" name="candidate_id" value="{{ row.candidate.pk }}">
+            <p>
+              <label>Action
+                <select name="action">
+                  {% for value, label in override_actions %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+                </select>
+              </label>
+              <label>New score (for &ldquo;adjust score&rdquo; only)
+                <input type="number" name="adjusted_score" min="0" max="100" step="0.1">
+              </label>
+            </p>
+            <p>
+              <label for="reason-{{ row.candidate.pk }}">Reason (required — this is the audit record)</label><br>
+              <textarea id="reason-{{ row.candidate.pk }}" name="reason" rows="3" cols="60" required></textarea>
+            </p>
+            <button type="submit">Log override</button>
+          </form>
+        {% else %}
+          <p class="muted">Sign in to record an override — every override is attributed to a
+             named user. <a href="/admin/login/?next={{ request.path }}">Sign in</a>.</p>
+        {% endif %}
+      </details>
+    </div>
+  {% empty %}
+    <p class="muted">No candidates in this run.</p>
+  {% endfor %}
+{% endblock %}

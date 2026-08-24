@@ -110,3 +110,34 @@ class StageResult(models.Model):
     @property
     def unmet_requirements(self) -> list:
         return [e for e in self.evaluations if not e.get("met")]
+
+
+class Override(models.Model):
+    """The human intervention log — sparse, created only on explicit recruiter action.
+
+    Overrides never edit a StageResult. The automated audit trail stays exactly as the
+    pipeline wrote it, and the effective outcome is StageResult + Override computed on
+    read. That separation is what lets the record answer, per candidate: what did the
+    pipeline decide, and what did a human change about it afterwards.
+
+    This is also the GDPR Art. 22 mechanism: no candidate is auto-rejected, because
+    every filtered-out candidate stays visible and reversible from Final Review.
+    """
+
+    ACTION_CHOICES = [("reinstate", "Reinstate filtered candidate"), ("adjust_score", "Adjust score"), ("note", "Add note")]
+
+    candidate = models.ForeignKey("candidates.Candidate", on_delete=models.CASCADE)
+    run = models.ForeignKey("runs.ScreeningRun", on_delete=models.CASCADE)
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    reason = models.TextField()
+    # Added beyond CLAUDE.md's model: "adjust_score" has no value to apply without it.
+    # Null for the other two actions.
+    adjusted_score = models.FloatField(null=True, blank=True)
+    performed_by = models.ForeignKey("auth.User", on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+
+    def __str__(self):
+        return f"{self.get_action_display()} — {self.candidate.original_filename}"

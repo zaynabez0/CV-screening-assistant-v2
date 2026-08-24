@@ -20,4 +20,7 @@ urlpatterns = [
     path("run/<int:run_id>/stage3/start/", views.start_stage3, name="stage3_start"),
     path("run/<int:run_id>/stage3/skip/", views.skip_stage3, name="stage3_skip"),
     path("run/<int:run_id>/stage3/confirm/", views.confirm_stage3, name="stage3_confirm"),
+    path("run/<int:run_id>/review/", views.final_review, name="final_review"),
+    path("run/<int:run_id>/review/override/", views.create_override, name="create_override"),
+    path("run/<int:run_id>/review/export.csv", views.export_csv, name="export_csv"),
 ]

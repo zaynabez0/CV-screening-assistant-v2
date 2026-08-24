@@ -4,17 +4,19 @@ The stage runs in a subprocess-launched management command so the request return
 immediately; the browser polls `stage1_status` until the job reports done or failed.
 """
 
+import csv
 import subprocess
 import sys
 
 from django.conf import settings
+from django.contrib.auth.decorators import login_required
 from django.contrib import messages
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 
 from candidates.models import Candidate
 
-from .models import ScreeningRun, StageResult
+from .models import Override, ScreeningRun, StageResult
 from screening.stage2_ranking.keywords import seed_keywords
 from screening.stage2_ranking.ranking import shortlist_size
 
@@ -22,6 +24,7 @@ from screening.stage3_scoring.rubric import apply_user_weights, build_rubric, ru
 
 from .services import (
     StageNotReady,
+    candidate_history,
     stage1_preflight,
     stage2_preflight,
     stage2_shortlist,
@@ -479,3 +482,140 @@ def confirm_stage3(request, run_id):
     run.save(update_fields=["current_stage", "job_status"])
     messages.success(request, f"Stage 3 confirmed with {count} scored candidate(s). Final Review is now available.")
     return redirect("runs:stage3_review", run_id=run.pk)
+
+
+# --- Final Review ---------------------------------------------------------------
+
+def final_review(request, run_id):
+    """The complete outcome across every stage, for every candidate.
+
+    Ranked by Stage 3 final_score, but nobody is omitted: a candidate filtered at
+    Stage 1 or rejected at upload appears with their reason intact. That is what makes
+    the pipeline reviewable rather than merely automatic.
+    """
+    run = get_object_or_404(ScreeningRun, pk=run_id)
+    rows = candidate_history(run)
+
+    return render(request, "runs/final_review.html", {
+        "run": run,
+        "rows": rows,
+        "override_actions": Override.ACTION_CHOICES,
+        "scored_count": sum(1 for r in rows if r["stage3"] is not None),
+        "override_count": sum(len(r["overrides"]) for r in rows),
+        "low_confidence_rows": [r for r in rows if r["low_confidence_flags"]],
+        "stage3_skipped": run.current_stage == "review" and not any(r["stage3"] for r in rows),
+    })
+
+
+@login_required
+def create_override(request, run_id):
+    """POST-only. Logs a recruiter's reversal of a pipeline decision.
+
+    Requires a reason and records who performed it — an override without either is not
+    an audit trail. Never edits a StageResult: the automated record stays as written
+    and the effective outcome is recomputed from both on read.
+    """
+    run = get_object_or_404(ScreeningRun, pk=run_id)
+    if request.method != "POST":
+        return redirect("runs:final_review", run_id=run.pk)
+
+    candidate = get_object_or_404(Candidate, pk=request.POST.get("candidate_id"), run=run)
+
+    action = request.POST.get("action", "")
+    if action not in dict(Override.ACTION_CHOICES):
+        messages.error(request, f"'{action}' is not a valid override action.")
+        return redirect("runs:final_review", run_id=run.pk)
+
+    reason = request.POST.get("reason", "").strip()
+    if not reason:
+        messages.error(request, "An override needs a reason — it is the audit record.")
+        return redirect("runs:final_review", run_id=run.pk)
+
+    adjusted_score = None
+    if action == "adjust_score":
+        raw = request.POST.get("adjusted_score", "").strip()
+        try:
+            adjusted_score = float(raw)
+        except ValueError:
+            messages.error(request, f"'{raw}' is not a valid score.")
+            return redirect("runs:final_review", run_id=run.pk)
+        if not 0 <= adjusted_score <= 100:
+            messages.error(request, "An adjusted score must be between 0 and 100.")
+            return redirect("runs:final_review", run_id=run.pk)
+
+    Override.objects.create(
+        run=run, candidate=candidate, action=action, reason=reason,
+        adjusted_score=adjusted_score, performed_by=request.user,
+    )
+    messages.success(
+        request,
+        f"Logged “{dict(Override.ACTION_CHOICES)[action]}” for {candidate.original_filename}.",
+    )
+    return redirect("runs:final_review", run_id=run.pk)
+
+
+def export_csv(request, run_id):
+    """The final ranked list plus its rationale, one row per candidate.
+
+    Every candidate is exported, including those filtered out — the export is the
+    record of what the tool recommended and why, not just the shortlist.
+
+    Note this file carries candidate names and emails: anonymization protects the LLM
+    stages, not the recruiter's own review, and a shortlist without names is unusable.
+    Treat the download as personal data.
+    """
+    run = get_object_or_404(ScreeningRun, pk=run_id)
+    rows = candidate_history(run)
+
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = f'attachment; filename="run-{run.pk}-final-review.csv"'
+
+    writer = csv.writer(response)
+    writer.writerow([
+        "position", "filename", "candidate_name", "email", "outcome",
+        "final_score", "automated_score", "score_adjusted", "reinstated",
+        "stage1_passed", "stage1_unmet", "stage1_reasons",
+        "stage2_rank", "stage2_semantic", "stage2_keyword", "stage2_combined",
+        "stage3_criteria", "low_confidence_flags",
+        "preprocessing_status", "rejection_reason", "overrides",
+    ])
+
+    for row in rows:
+        candidate = row["candidate"]
+        extracted = candidate.extracted_json or {}
+        stage1, stage2, stage3 = row["stage1"], row["stage2"], row["stage3"]
+
+        unmet = [e["requirement"] for e in stage1.unmet_requirements] if stage1 else []
+        stage1_reasons = (
+            " | ".join(f"{e['requirement']}: {'met' if e['met'] else 'NOT met'} — {e['reason']}"
+                       for e in stage1.evaluations)
+            if stage1 else ""
+        )
+        stage3_criteria = (
+            " | ".join(f"{cs['criterion']}: {cs['score']}/5 ({cs['confidence']}) — {cs['evidence_quote']}"
+                       for cs in stage3.output_json.get("criterion_breakdown", []))
+            if stage3 else ""
+        )
+        overrides = " | ".join(
+            f"{o.get_action_display()} by {o.performed_by.username} on "
+            f"{o.created_at:%Y-%m-%d}: {o.reason}" for o in row["overrides"]
+        )
+
+        writer.writerow([
+            row["position"], candidate.original_filename,
+            extracted.get("full_name", ""), extracted.get("email", ""), row["outcome"],
+            "" if row["effective_score"] is None else row["effective_score"],
+            "" if row["automated_score"] is None else row["automated_score"],
+            "yes" if row["score_adjusted"] else "",
+            "yes" if row["reinstated"] else "",
+            "" if stage1 is None else ("pass" if stage1.passed else "fail"),
+            "; ".join(unmet), stage1_reasons,
+            row["stage2_rank"] or "",
+            "" if stage2 is None else round(stage2.output_json.get("semantic_score", 0), 4),
+            "" if stage2 is None else round(stage2.output_json.get("keyword_score", 0), 4),
+            "" if stage2 is None else round(stage2.output_json.get("final_score", 0), 4),
+            stage3_criteria, "; ".join(row["low_confidence_flags"]),
+            candidate.get_status_display(), candidate.rejection_reason, overrides,
+        ])
+
+    return response

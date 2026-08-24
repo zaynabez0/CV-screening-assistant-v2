@@ -5,6 +5,8 @@ bypassed in the work tests, which call the service directly — that way the rea
 evaluation logic is exercised without spawning a process the test runner can't see.
 """
 
+import csv
+import io
 import json
 from unittest.mock import patch
 
@@ -14,8 +16,14 @@ from django.urls import reverse
 
 from candidates.models import Candidate
 from jobs.models import JobDescription
-from runs.models import ScreeningRun, StageResult
-from runs.services import StageNotReady, run_stage1, run_stage2, run_stage3
+from runs.models import Override, ScreeningRun, StageResult
+from runs.services import (
+    StageNotReady,
+    candidate_history,
+    run_stage1,
+    run_stage2,
+    run_stage3,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -1114,3 +1122,396 @@ def test_start_launches_the_stage3_command_in_a_subprocess(client, scored_run):
     assert popen.call_args.args[0][1:] == ["manage.py", "run_stage3", str(scored_run.pk)]
     scored_run.refresh_from_db()
     assert scored_run.job_status == "running"
+
+
+# =============================================================================
+# Final Review — history, overrides, CSV export
+# =============================================================================
+
+def review_run(**kwargs):
+    jd = JobDescription.objects.create(
+        input_mode="text", raw_text="Backend engineer.",
+        requirements=[MUST_HAVE, KUBERNETES, INFERRED], confirmed_by_user=True,
+    )
+    defaults = {"job_description": jd, "current_stage": "review"}
+    defaults.update(kwargs)
+    return ScreeningRun.objects.create(**defaults)
+
+
+def score_stage3(run, candidate, final_score=70.0, low_confidence=()):
+    return StageResult.objects.create(
+        run=run, candidate=candidate, stage="stage3", passed=None,
+        output_json={
+            "final_score": final_score,
+            "criterion_breakdown": [
+                {"criterion": "Kubernetes", "score": 4, "evidence_quote": "Ran clusters",
+                 "reasoning": "Operated Kubernetes.", "confidence": "high"},
+            ],
+            "low_confidence_flags": list(low_confidence),
+            "unscored_criteria": [], "unknown_criteria": [],
+            "weights_used": {"Kubernetes": 0.75, "Team leadership": 0.25},
+        },
+    )
+
+
+def fail_stage1(run, candidate):
+    return StageResult.objects.create(
+        run=run, candidate=candidate, stage="stage1", passed=False,
+        output_json={"evaluations": [{"requirement": "5+ years Python", "met": False,
+                                      "evidence": "", "reason": "No Python experience stated."}]},
+    )
+
+
+@pytest.fixture
+def recruiter(django_user_model):
+    return django_user_model.objects.create_user(username="hr_amine", password="pw12345")
+
+
+@pytest.fixture
+def full_run():
+    """A run covering every possible fate: scored, below cutoff, Stage 1 failure,
+    and a CV rejected at upload that never entered the pipeline."""
+    run = review_run(stage2_cutoff_percent=50.0)
+
+    top = add_candidate(run, "top.pdf")
+    middle = add_candidate(run, "middle.pdf", name="Youssef El Amrani")
+    filtered = add_candidate(run, "filtered.pdf", name="Sofia Marchetti")
+    unreadable = add_candidate(run, "scan.pdf", status="rejected")
+    unreadable.rejection_reason = "no extractable text found"
+    unreadable.save()
+
+    for candidate in (top, middle, filtered):
+        StageResult.objects.create(
+            run=run, candidate=candidate, stage="stage1",
+            passed=candidate is not filtered,
+            output_json={"evaluations": [{
+                "requirement": "5+ years Python",
+                "met": candidate is not filtered,
+                "evidence": "Built Python ETL pipelines" if candidate is not filtered else "",
+                "reason": "6 years stated." if candidate is not filtered else "No Python experience stated.",
+            }]},
+        )
+    rank_stage2(run, top, rank=1, final_score=0.9)
+    rank_stage2(run, middle, rank=2, final_score=0.4)
+    score_stage3(run, top, final_score=82.0)
+
+    return {"run": run, "top": top, "middle": middle,
+            "filtered": filtered, "unreadable": unreadable}
+
+
+# --- Every candidate appears, not just survivors ---------------------------------
+
+def test_history_includes_every_candidate_whatever_their_fate(full_run):
+    """GDPR Art. 22: a filtered-out CV stays visible. A decision nobody can see is a
+    decision nobody can review."""
+    rows = candidate_history(full_run["run"])
+
+    assert {r["candidate"].original_filename for r in rows} == {
+        "top.pdf", "middle.pdf", "filtered.pdf", "scan.pdf",
+    }
+
+
+def test_history_ranks_scored_candidates_first(full_run):
+    rows = candidate_history(full_run["run"])
+
+    assert rows[0]["candidate"].original_filename == "top.pdf"
+    assert rows[0]["effective_score"] == 82.0
+    assert [r["position"] for r in rows] == [1, 2, 3, 4]
+
+
+def test_history_carries_each_stage_reason_through(full_run):
+    rows = {r["candidate"].original_filename: r for r in candidate_history(full_run["run"])}
+
+    assert rows["filtered.pdf"]["stage1"].passed is False
+    assert rows["filtered.pdf"]["stage1"].evaluations[0]["reason"] == "No Python experience stated."
+    assert rows["middle.pdf"]["stage2_rank"] == 2
+    assert rows["scan.pdf"]["candidate"].rejection_reason == "no extractable text found"
+
+
+def test_a_candidate_rejected_at_upload_has_no_stage_results(full_run):
+    rows = {r["candidate"].original_filename: r for r in candidate_history(full_run["run"])}
+
+    scan = rows["scan.pdf"]
+    assert scan["stage1"] is None and scan["stage2"] is None and scan["stage3"] is None
+    assert scan["effective_score"] is None
+
+
+def test_low_confidence_flags_are_surfaced_on_the_row(full_run):
+    score_stage3(full_run["run"], full_run["middle"], final_score=55.0,
+                 low_confidence=["Team leadership"])
+
+    rows = {r["candidate"].original_filename: r for r in candidate_history(full_run["run"])}
+
+    assert rows["middle.pdf"]["low_confidence_flags"] == ["Team leadership"]
+
+
+def test_final_review_page_shows_survivors_and_filtered_alike(client, full_run):
+    html = client.get(reverse("runs:final_review", args=[full_run["run"].pk])).content.decode()
+
+    for name in ("top.pdf", "middle.pdf", "filtered.pdf", "scan.pdf"):
+        assert name in html
+    assert "No Python experience stated." in html          # the Stage 1 failure reason
+    assert "no extractable text found" in html             # the upload rejection reason
+    assert "Ran clusters" in html                          # Stage 3 evidence
+
+
+# --- The override flow ------------------------------------------------------------
+
+def test_an_override_requires_a_signed_in_user(client, full_run):
+    """performed_by is non-null: an override with no named author is not an audit record."""
+    response = client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                           {"candidate_id": full_run["filtered"].pk, "action": "reinstate",
+                            "reason": "Equivalent experience in Go."})
+
+    assert response.status_code == 302
+    assert "/admin/login/" in response.url
+    assert Override.objects.count() == 0
+
+
+def test_an_override_requires_a_reason(client, full_run, recruiter):
+    client.force_login(recruiter)
+
+    client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                {"candidate_id": full_run["filtered"].pk, "action": "reinstate", "reason": "   "})
+
+    assert Override.objects.count() == 0
+
+
+def test_reinstating_logs_the_action_reason_and_user(client, full_run, recruiter):
+    client.force_login(recruiter)
+
+    client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                {"candidate_id": full_run["filtered"].pk, "action": "reinstate",
+                 "reason": "Ten years of Go maps to the Python requirement."})
+
+    override = Override.objects.get()
+    assert override.action == "reinstate"
+    assert override.candidate == full_run["filtered"]
+    assert override.performed_by == recruiter
+    assert override.reason == "Ten years of Go maps to the Python requirement."
+
+
+def test_an_override_never_edits_the_stage_result(client, full_run, recruiter):
+    """StageResult is the automated trail — nobody edits it after the fact. The
+    effective outcome is StageResult + Override, computed on read."""
+    client.force_login(recruiter)
+    before = StageResult.objects.get(run=full_run["run"], candidate=full_run["filtered"], stage="stage1")
+
+    client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                {"candidate_id": full_run["filtered"].pk, "action": "reinstate",
+                 "reason": "Equivalent experience."})
+
+    after = StageResult.objects.get(pk=before.pk)
+    assert after.passed is False                              # unchanged
+    assert after.output_json == before.output_json
+
+
+def test_reinstating_promotes_the_candidate_above_the_filtered_group(client, full_run, recruiter):
+    client.force_login(recruiter)
+    before = [r["candidate"].original_filename for r in candidate_history(full_run["run"])]
+    assert before.index("filtered.pdf") > before.index("middle.pdf")
+
+    client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                {"candidate_id": full_run["filtered"].pk, "action": "reinstate",
+                 "reason": "Equivalent experience."})
+
+    rows = candidate_history(full_run["run"])
+    names = [r["candidate"].original_filename for r in rows]
+    assert names.index("filtered.pdf") < names.index("middle.pdf")
+    reinstated = next(r for r in rows if r["candidate"].original_filename == "filtered.pdf")
+    assert reinstated["reinstated"] is True
+    assert "Reinstated by a recruiter" in reinstated["outcome"]
+
+
+def test_adjusting_a_score_replaces_the_effective_score_but_keeps_the_automated_one(
+        client, full_run, recruiter):
+    client.force_login(recruiter)
+
+    client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                {"candidate_id": full_run["top"].pk, "action": "adjust_score",
+                 "adjusted_score": "55", "reason": "Overstated leadership evidence."})
+
+    row = next(r for r in candidate_history(full_run["run"])
+               if r["candidate"].original_filename == "top.pdf")
+    assert row["effective_score"] == 55.0
+    assert row["automated_score"] == 82.0                     # what the pipeline said, preserved
+    assert row["score_adjusted"] is True
+
+
+def test_the_most_recent_score_adjustment_wins(client, full_run, recruiter):
+    client.force_login(recruiter)
+    url = reverse("runs:create_override", args=[full_run["run"].pk])
+
+    client.post(url, {"candidate_id": full_run["top"].pk, "action": "adjust_score",
+                      "adjusted_score": "55", "reason": "First pass."})
+    client.post(url, {"candidate_id": full_run["top"].pk, "action": "adjust_score",
+                      "adjusted_score": "64", "reason": "Reconsidered after a call."})
+
+    row = next(r for r in candidate_history(full_run["run"])
+               if r["candidate"].original_filename == "top.pdf")
+    assert row["effective_score"] == 64.0
+    assert len(row["overrides"]) == 2                         # both kept in the log
+
+
+def test_an_out_of_range_adjusted_score_is_rejected(client, full_run, recruiter):
+    client.force_login(recruiter)
+
+    client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                {"candidate_id": full_run["top"].pk, "action": "adjust_score",
+                 "adjusted_score": "150", "reason": "Too good."})
+
+    assert Override.objects.count() == 0
+
+
+def test_a_non_numeric_adjusted_score_is_rejected(client, full_run, recruiter):
+    client.force_login(recruiter)
+
+    client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                {"candidate_id": full_run["top"].pk, "action": "adjust_score",
+                 "adjusted_score": "excellent", "reason": "Too good."})
+
+    assert Override.objects.count() == 0
+
+
+def test_an_unknown_action_is_rejected(client, full_run, recruiter):
+    client.force_login(recruiter)
+
+    client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                {"candidate_id": full_run["top"].pk, "action": "delete_candidate",
+                 "reason": "Not a real action."})
+
+    assert Override.objects.count() == 0
+
+
+def test_a_note_override_records_context_without_changing_anything(client, full_run, recruiter):
+    client.force_login(recruiter)
+
+    client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                {"candidate_id": full_run["top"].pk, "action": "note",
+                 "reason": "Referred by the engineering manager."})
+
+    row = next(r for r in candidate_history(full_run["run"])
+               if r["candidate"].original_filename == "top.pdf")
+    assert row["effective_score"] == 82.0                     # untouched
+    assert row["reinstated"] is False
+    assert row["overrides"][0].action == "note"
+
+
+def test_an_override_cannot_target_a_candidate_from_another_run(client, full_run, recruiter):
+    client.force_login(recruiter)
+    other = review_run()
+    outsider = add_candidate(other, "outsider.pdf")
+
+    response = client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                           {"candidate_id": outsider.pk, "action": "note", "reason": "Wrong run."})
+
+    assert response.status_code == 404
+    assert Override.objects.count() == 0
+
+
+def test_overrides_appear_on_the_review_page_with_their_author(client, full_run, recruiter):
+    client.force_login(recruiter)
+    client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                {"candidate_id": full_run["filtered"].pk, "action": "reinstate",
+                 "reason": "Equivalent experience in Go."})
+
+    html = client.get(reverse("runs:final_review", args=[full_run["run"].pk])).content.decode()
+
+    assert "Equivalent experience in Go." in html
+    assert "hr_amine" in html
+    assert "reinstated" in html
+
+
+# --- CSV export -------------------------------------------------------------------------
+
+def read_csv(client, run):
+    response = client.get(reverse("runs:export_csv", args=[run.pk]))
+    assert response.status_code == 200
+    return response, list(csv.DictReader(io.StringIO(response.content.decode())))
+
+
+def test_csv_is_served_as_a_download(client, full_run):
+    response, _ = read_csv(client, full_run["run"])
+
+    assert response["Content-Type"] == "text/csv"
+    assert f'filename="run-{full_run["run"].pk}-final-review.csv"' in response["Content-Disposition"]
+
+
+def test_csv_exports_every_candidate_not_just_the_shortlist(client, full_run):
+    _, rows = read_csv(client, full_run["run"])
+
+    assert [r["filename"] for r in rows] == ["top.pdf", "middle.pdf", "filtered.pdf", "scan.pdf"]
+    assert [r["position"] for r in rows] == ["1", "2", "3", "4"]
+
+
+def test_csv_carries_the_rationale_for_each_stage(client, full_run):
+    _, rows = read_csv(client, full_run["run"])
+    by_name = {r["filename"]: r for r in rows}
+
+    assert "No Python experience stated." in by_name["filtered.pdf"]["stage1_reasons"]
+    assert by_name["filtered.pdf"]["stage1_unmet"] == "5+ years Python"
+    assert by_name["filtered.pdf"]["stage1_passed"] == "fail"
+    assert by_name["middle.pdf"]["stage2_rank"] == "2"
+    assert "Kubernetes: 4/5 (high) — Ran clusters" in by_name["top.pdf"]["stage3_criteria"]
+    assert by_name["scan.pdf"]["rejection_reason"] == "no extractable text found"
+
+
+def test_csv_includes_the_candidate_name_for_the_recruiter(client, full_run):
+    """Anonymization protects the LLM stages, not the recruiter's own review — a
+    shortlist without names is unusable. The file is personal data."""
+    _, rows = read_csv(client, full_run["run"])
+
+    assert rows[0]["candidate_name"] == "Amina Benali"
+    assert rows[0]["email"] == "amina@example.com"
+
+
+def test_csv_shows_both_the_automated_and_the_overridden_score(client, full_run, recruiter):
+    client.force_login(recruiter)
+    client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                {"candidate_id": full_run["top"].pk, "action": "adjust_score",
+                 "adjusted_score": "55", "reason": "Overstated leadership evidence."})
+
+    _, rows = read_csv(client, full_run["run"])
+
+    assert rows[0]["final_score"] == "55.0"
+    assert rows[0]["automated_score"] == "82.0"
+    assert rows[0]["score_adjusted"] == "yes"
+    assert "Overstated leadership evidence." in rows[0]["overrides"]
+    assert "hr_amine" in rows[0]["overrides"]
+
+
+def test_csv_records_low_confidence_flags(client, full_run):
+    score_stage3(full_run["run"], full_run["middle"], final_score=55.0,
+                 low_confidence=["Team leadership"])
+
+    _, rows = read_csv(client, full_run["run"])
+    by_name = {r["filename"]: r for r in rows}
+
+    assert by_name["middle.pdf"]["low_confidence_flags"] == "Team leadership"
+
+
+def test_csv_survives_a_run_where_nothing_has_been_scored(client):
+    """A run abandoned after upload still exports — the record of what happened
+    should not depend on the pipeline having finished."""
+    run = review_run()
+    add_candidate(run, "only.pdf")
+
+    _, rows = read_csv(client, run)
+
+    assert len(rows) == 1
+    assert rows[0]["final_score"] == ""
+    assert rows[0]["stage1_passed"] == ""
+
+
+def test_csv_quotes_reasons_containing_commas(client, full_run, recruiter):
+    """A reason is free text; an unescaped comma would silently shift every later
+    column and corrupt the audit record."""
+    client.force_login(recruiter)
+    client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                {"candidate_id": full_run["top"].pk, "action": "note",
+                 "reason": "Strong, but expensive, and remote-only."})
+
+    _, rows = read_csv(client, full_run["run"])
+
+    assert "Strong, but expensive, and remote-only." in rows[0]["overrides"]
+    assert rows[0]["filename"] == "top.pdf"                   # columns still aligned

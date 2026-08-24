@@ -90,6 +90,11 @@ DATABASES = {
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
+# Django's default LOGIN_URL is /accounts/login/, which does not exist here — an
+# override-attempt by an anonymous user would redirect to a 404. The admin login is
+# the only sign-in UI this project has.
+LOGIN_URL = "/admin/login/"
+
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
