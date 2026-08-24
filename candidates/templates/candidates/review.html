@@ -1,0 +1,65 @@
+{% extends "candidates/base.html" %}
+{% block title %}CV preprocessing review{% endblock %}
+{% block heading %}CV preprocessing — review checkpoint{% endblock %}
+
+{% block content %}
+  <p>Check each extraction before it reaches Stage 1. A garbled extraction caught here is a
+     wrong Stage&nbsp;1 decision avoided.</p>
+
+  {% if low_confidence_count %}
+    <p class="msg warning"><strong>{{ low_confidence_count }} low-confidence extraction(s)</strong>
+       — flagged below. Read these before confirming.</p>
+  {% endif %}
+
+  {% if awaiting_structuring %}
+    <form method="post" action="{% url 'candidates:structure' run.pk %}">
+      {% csrf_token %}
+      <button type="submit" {% if blocked %}disabled{% endif %}>
+        Structure {{ awaiting_structuring|length }} validated CV(s) with the LLM
+      </button>
+    </form>
+  {% endif %}
+
+  <h2>Candidates ({{ candidates|length }})</h2>
+  {% for c in candidates %}
+    <div class="card {% if c.is_low_confidence %}flagged{% elif c.status == 'rejected' or c.status == 'duplicate' %}rejected{% endif %}">
+      <p>
+        <span class="filename">{{ c.original_filename }}</span>
+        <span class="badge">{{ c.get_status_display }}</span>
+        {% if c.extraction_confidence %}
+          <span class="badge {{ c.extraction_confidence }}">confidence: {{ c.extraction_confidence }}</span>
+        {% endif %}
+      </p>
+
+      {% if c.is_low_confidence %}
+        <p class="flag-note">&#9888; Low confidence — verify this extraction by hand against the original CV.</p>
+      {% endif %}
+
+      {% if c.rejection_reason %}<p class="muted">{{ c.rejection_reason }}</p>{% endif %}
+
+      {% if c.extracted_json %}
+        {% if c.extracted_json.extraction_notes %}
+          <p class="muted"><em>Extraction notes:</em> {{ c.extracted_json.extraction_notes }}</p>
+        {% endif %}
+        <details>
+          <summary>Extracted JSON</summary>
+          <pre>{{ c.extracted_json|pprint }}</pre>
+        </details>
+      {% elif c.status == 'pending' %}
+        <p class="muted">Validated, not yet structured.</p>
+      {% endif %}
+    </div>
+  {% empty %}
+    <p class="muted">No CVs uploaded yet. <a href="{% url 'candidates:upload' run.pk %}">Upload some</a>.</p>
+  {% endfor %}
+
+  {% if ready_count %}
+    <h2>Confirm</h2>
+    <p>Confirming locks in {{ ready_count }} structured candidate(s) and makes Stage 1 available.
+       Nothing runs automatically.</p>
+    <form method="post" action="{% url 'candidates:confirm' run.pk %}">
+      {% csrf_token %}
+      <button type="submit" {% if blocked %}disabled{% endif %}>Confirm preprocessing and continue</button>
+    </form>
+  {% endif %}
+{% endblock %}
