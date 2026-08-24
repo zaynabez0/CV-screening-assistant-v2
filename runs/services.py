@@ -7,6 +7,7 @@ means the tests exercise the real work without spawning a subprocess.
 from candidates.models import Candidate
 from screening.cv.anonymization import anonymize_candidate
 from screening.stage1_hard_filter.evaluation import evaluate_hard_filters, select_must_have
+from screening.stage2_ranking.ranking import score_breakdown, shortlist_size
 
 from .models import StageResult
 
@@ -77,3 +78,61 @@ def run_stage1(run) -> dict:
         f"must-have requirement{note}."
     )
     return summary
+
+
+def stage2_preflight(run) -> list:
+    """Everything that must be true before Stage 2 may start. Returns the survivors."""
+    if run.current_stage != "stage2_pending":
+        raise StageNotReady(
+            f"Run is at '{run.get_current_stage_display()}', not ready for Stage 2."
+        )
+    if not run.job_description.confirmed_by_user:
+        raise StageNotReady("The job description's requirements have not been confirmed yet.")
+
+    survivor_ids = StageResult.objects.filter(
+        run=run, stage="stage1", passed=True
+    ).values_list("candidate_id", flat=True)
+    survivors = list(Candidate.objects.filter(pk__in=survivor_ids).order_by("pk"))
+    if not survivors:
+        raise StageNotReady("No candidates passed Stage 1, so there is nothing to rank.")
+    return survivors
+
+
+def run_stage2(run) -> dict:
+    """Rank Stage 1's survivors by a 50/50 blend of semantic similarity and keywords.
+
+    Writes one StageResult per survivor with both halves of the score and its rank.
+    The cutoff is NOT applied here: it lives on the run and is applied when the
+    shortlist is read, so the recruiter can move it without paying for a re-run.
+    """
+    survivors = stage2_preflight(run)
+    keywords = list(run.stage2_keywords)
+
+    run.mark_job_started("stage2", total=len(survivors))
+    run.job_message = "Loading the embedding model and scoring candidates…"
+    run.save(update_fields=["job_message"])
+
+    StageResult.objects.filter(run=run, stage="stage2").delete()
+
+    anonymized = [anonymize_candidate(c.extracted_json) for c in survivors]
+    breakdown = score_breakdown(run.job_description.requirements, anonymized, keywords)
+
+    # Highest score first; ties keep upload order so the ranking is reproducible.
+    order = sorted(range(len(survivors)), key=lambda i: (-breakdown[i]["final_score"], i))
+
+    for rank, index in enumerate(order, start=1):
+        StageResult.objects.create(
+            run=run,
+            candidate=survivors[index],
+            stage="stage2",
+            passed=None,  # ranking has no pass/fail — the cutoff decides, and it is adjustable
+            output_json={**breakdown[index], "rank": rank, "keywords_used": keywords},
+        )
+        run.mark_job_progress(rank)
+
+    shortlisted = shortlist_size(len(survivors), run.stage2_cutoff_percent)
+    run.mark_job_finished(
+        f"Stage 2 complete: {len(survivors)} candidate(s) ranked. At the current "
+        f"{run.stage2_cutoff_percent:g}% cutoff, {shortlisted} would go to Stage 3."
+    )
+    return {"ranked": len(survivors), "shortlisted": shortlisted, "keywords_used": keywords}

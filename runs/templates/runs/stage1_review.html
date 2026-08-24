@@ -59,7 +59,7 @@
   {% if run.job_status == "running" %}
   <script>
     // Poll the job status field on ScreeningRun until the subprocess reports back.
-    const statusUrl = "{% url 'runs:stage1_status' run.pk %}";
+    const statusUrl = "{% url 'runs:job_status' run.pk %}";
     const poll = setInterval(async () => {
       try {
         const r = await fetch(statusUrl, {headers: {"X-Requested-With": "fetch"}});
