@@ -1,0 +1,32 @@
+{% comment %}One candidate's Stage 1 verdict with every per-requirement reason.{% endcomment %}
+<div class="card {% if not result.passed %}rejected{% endif %}">
+  <p>
+    <span class="filename">{{ result.candidate.original_filename }}</span>
+    {% if result.passed %}
+      <span class="badge high">passed</span>
+    {% else %}
+      <span class="badge low">did not pass</span>
+      <span class="muted">{{ result.unmet_requirements|length }} unmet</span>
+    {% endif %}
+  </p>
+
+  {% if result.evaluations %}
+    <table>
+      <thead><tr><th>Requirement</th><th>Met</th><th>Evidence / reason</th></tr></thead>
+      <tbody>
+        {% for e in result.evaluations %}
+          <tr class="{% if not e.met %}row-unmet{% endif %}">
+            <td>{{ e.requirement }}</td>
+            <td>{% if e.met %}&#10003; yes{% else %}&#10007; no{% endif %}</td>
+            <td>
+              {% if e.evidence %}<q>{{ e.evidence }}</q><br>{% endif %}
+              <span class="muted">{{ e.reason }}</span>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No must-have requirements on this JD — nothing was gated.</p>
+  {% endif %}
+</div>

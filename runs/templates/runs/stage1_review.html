@@ -1,0 +1,74 @@
+{% extends "candidates/base.html" %}
+{% block title %}Stage 1 review{% endblock %}
+{% block heading %}Stage 1 — hard filter review{% endblock %}
+
+{% block content %}
+  <p>Every candidate evaluated against the JD's must-have requirements, with the reason
+     for each verdict. <strong>Nobody is rejected here</strong> — failures stay visible and
+     reversible at Final Review.</p>
+
+  {% if run.job_status == "running" %}
+    <div class="card" id="job-panel">
+      <p><strong>Stage 1 is running…</strong>
+         <span id="job-progress">{{ run.job_processed }} / {{ run.job_total }}</span></p>
+      <p class="muted">This page refreshes itself when the job finishes.</p>
+    </div>
+  {% elif run.job_status == "failed" %}
+    <p class="msg error"><strong>Stage 1 failed:</strong> {{ run.job_message }}</p>
+  {% elif run.job_status == "done" and run.job_message %}
+    <p class="msg success">{{ run.job_message }}</p>
+  {% endif %}
+
+  {% if run.job_status != "running" %}
+    <form method="post" action="{% url 'runs:stage1_start' run.pk %}">
+      {% csrf_token %}
+      <button type="submit" {% if blocked %}disabled{% endif %}>
+        {% if has_results %}Re-run Stage 1{% else %}Run Stage 1 on {{ ready_count }} candidate(s){% endif %}
+      </button>
+    </form>
+    {% if has_results %}
+      <p class="muted">Re-running replaces these verdicts — it does not add a second set.</p>
+    {% endif %}
+  {% endif %}
+
+  {% if has_results %}
+    <h2>Met every must-have — continue to Stage 2 ({{ passed|length }})</h2>
+    {% for result in passed %}{% include "runs/_stage1_result.html" %}{% empty %}
+      <p class="muted">No candidate met every must-have requirement.</p>
+    {% endfor %}
+
+    <h2>Did not meet every must-have ({{ failed|length }})</h2>
+    <p class="muted">Shown in full, with reasons. Recall matters more than precision at this
+       stage — a candidate wrongly filtered out here never reaches Stage 2, so read these.</p>
+    {% for result in failed %}{% include "runs/_stage1_result.html" %}{% empty %}
+      <p class="muted">Every candidate met every must-have requirement.</p>
+    {% endfor %}
+
+    {% if run.current_stage == "stage1_pending" and run.job_status != "running" %}
+      <h2>Confirm</h2>
+      <p>Confirming carries {{ passed|length }} candidate(s) into Stage 2. Nothing runs automatically.</p>
+      <form method="post" action="{% url 'runs:stage1_confirm' run.pk %}">
+        {% csrf_token %}
+        <button type="submit">Confirm Stage 1 and continue</button>
+      </form>
+    {% endif %}
+  {% elif run.job_status != "running" %}
+    <p class="muted">Stage 1 has not run yet for this run.</p>
+  {% endif %}
+
+  {% if run.job_status == "running" %}
+  <script>
+    // Poll the job status field on ScreeningRun until the subprocess reports back.
+    const statusUrl = "{% url 'runs:stage1_status' run.pk %}";
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch(statusUrl, {headers: {"X-Requested-With": "fetch"}});
+        const data = await r.json();
+        const el = document.getElementById("job-progress");
+        if (el) el.textContent = data.processed + " / " + data.total;
+        if (data.status !== "running") { clearInterval(poll); location.reload(); }
+      } catch (e) { /* transient failure — the next tick retries */ }
+    }, 2000);
+  </script>
+  {% endif %}
+{% endblock %}
