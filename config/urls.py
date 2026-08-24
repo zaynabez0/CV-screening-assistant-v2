@@ -23,6 +23,7 @@ from django.urls import include, path
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("", include("candidates.urls")),
+    path("", include("runs.urls")),
 ]
 
 if settings.DEBUG:  # uploaded CVs are served by Django in development only
