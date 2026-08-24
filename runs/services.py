@@ -12,7 +12,7 @@ from screening.stage3_scoring.aggregation import aggregate_score
 from screening.stage3_scoring.rubric import apply_user_weights, build_rubric, rubric_is_empty
 from screening.stage3_scoring.scoring import score_candidate
 
-from .models import StageResult
+from .models import Override, StageResult
 
 
 class StageNotReady(Exception):
@@ -216,3 +216,104 @@ def run_stage3(run) -> dict:
     note = f" {anomalies} had criteria the model mis-named or skipped." if anomalies else ""
     run.mark_job_finished(f"Stage 3 complete: {len(shortlist)} candidate(s) scored.{note}")
     return {"scored": len(shortlist), "anomalies": anomalies}
+
+
+# --- Final Review -------------------------------------------------------------
+
+# Sort groups. Lower sorts first. A reinstated candidate is promoted one group, which
+# is what "reverse the stage's decision" means in the ordering.
+_GROUP_SCORED = 0        # has a Stage 3 score
+_GROUP_REINSTATED = 1    # a human put them back in contention
+_GROUP_RANKED = 2        # ranked at Stage 2 but below the cutoff
+_GROUP_FILTERED = 3      # did not pass Stage 1
+_GROUP_NOT_SCREENED = 4  # never reached Stage 1 (rejected at upload, duplicate, unstructured)
+
+
+def candidate_history(run) -> list[dict]:
+    """One row per candidate in the run — every candidate, not just survivors.
+
+    Assembles the automated trail (StageResult) with the human trail (Override) into
+    the effective outcome. Nothing is filtered out: a CV rejected at upload appears
+    alongside the top-scored candidate, because a decision nobody can see is a decision
+    nobody can review.
+    """
+    candidates = list(Candidate.objects.filter(run=run).order_by("pk"))
+    results = StageResult.objects.filter(run=run).select_related("candidate")
+    overrides = list(Override.objects.filter(run=run).select_related("performed_by", "candidate"))
+
+    by_candidate = {c.pk: {"stage1": None, "stage2": None, "stage3": None} for c in candidates}
+    for result in results:
+        if result.candidate_id in by_candidate:
+            by_candidate[result.candidate_id][result.stage] = result
+
+    override_map = {c.pk: [] for c in candidates}
+    for override in overrides:
+        if override.candidate_id in override_map:
+            override_map[override.candidate_id].append(override)
+
+    ranked_count = sum(1 for c in candidates if by_candidate[c.pk]["stage2"] is not None)
+    cut = shortlist_size(ranked_count, run.stage2_cutoff_percent)
+
+    rows = []
+    for candidate in candidates:
+        stages = by_candidate[candidate.pk]
+        candidate_overrides = override_map[candidate.pk]
+
+        reinstated = any(o.action == "reinstate" for o in candidate_overrides)
+        # Overrides are ordered newest first, so the first adjust_score is the current one.
+        adjustment = next(
+            (o for o in candidate_overrides if o.action == "adjust_score" and o.adjusted_score is not None),
+            None,
+        )
+
+        stage3 = stages["stage3"]
+        automated_score = stage3.output_json.get("final_score") if stage3 else None
+        effective_score = adjustment.adjusted_score if adjustment else automated_score
+
+        stage2 = stages["stage2"]
+        stage2_rank = stage2.output_json.get("rank") if stage2 else None
+        shortlisted = stage2_rank is not None and stage2_rank <= cut
+
+        stage1 = stages["stage1"]
+        if stage3 is not None:
+            group, outcome = _GROUP_SCORED, "Scored at Stage 3"
+        elif stage1 is not None and stage1.passed is False:
+            group, outcome = _GROUP_FILTERED, "Filtered out at Stage 1"
+        elif stage2 is not None and not shortlisted:
+            group, outcome = _GROUP_RANKED, "Ranked below the Stage 2 cutoff"
+        elif stage1 is not None and stage1.passed:
+            group, outcome = _GROUP_RANKED, "Passed Stage 1"
+        else:
+            group, outcome = _GROUP_NOT_SCREENED, candidate.get_status_display()
+
+        if reinstated and group > _GROUP_REINSTATED:
+            group, outcome = _GROUP_REINSTATED, f"Reinstated by a recruiter (was: {outcome.lower()})"
+
+        rows.append({
+            "candidate": candidate,
+            "stage1": stage1,
+            "stage2": stage2,
+            "stage3": stage3,
+            "stage2_rank": stage2_rank,
+            "shortlisted": shortlisted,
+            "automated_score": automated_score,
+            "effective_score": effective_score,
+            "score_adjusted": adjustment is not None,
+            "reinstated": reinstated,
+            "overrides": candidate_overrides,
+            "outcome": outcome,
+            "low_confidence_flags": stage3.output_json.get("low_confidence_flags", []) if stage3 else [],
+            "_group": group,
+        })
+
+    # Ranked by Stage 3 final_score. Candidates with no score keep their group's own
+    # order (Stage 2 rank, then upload order) rather than being dropped off the list.
+    rows.sort(key=lambda r: (
+        r["_group"],
+        -(r["effective_score"] if r["effective_score"] is not None else -1),
+        r["stage2_rank"] if r["stage2_rank"] is not None else 10**6,
+        r["candidate"].pk,
+    ))
+    for position, row in enumerate(rows, start=1):
+        row["position"] = position
+    return rows

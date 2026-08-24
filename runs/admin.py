@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import ScreeningRun, StageResult
+from .models import Override, ScreeningRun, StageResult
 
 
 @admin.register(ScreeningRun)
@@ -13,4 +13,11 @@ class ScreeningRunAdmin(admin.ModelAdmin):
 class StageResultAdmin(admin.ModelAdmin):
     list_display = ("candidate", "run", "stage", "passed", "created_at")
     list_filter = ("stage", "passed", "run")
+    readonly_fields = ("created_at",)
+
+
+@admin.register(Override)
+class OverrideAdmin(admin.ModelAdmin):
+    list_display = ("candidate", "run", "action", "performed_by", "created_at")
+    list_filter = ("action", "run")
     readonly_fields = ("created_at",)
