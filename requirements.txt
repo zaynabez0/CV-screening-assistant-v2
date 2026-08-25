@@ -4,6 +4,9 @@ django
 # LLM calls - OpenAI Responses API with Structured Outputs
 openai
 
+# Loads .env so the API key and gateway settings reach the app
+python-dotenv
+
 # Text extraction from PDF / DOCX
 pymupdf
 python-docx

@@ -70,32 +70,72 @@ download.
 
 ## 3. Set your API key
 
-> ⚠️ **`.env` is not loaded automatically.** Nothing in this project reads it — there is
-> no `python-dotenv` dependency. Copying `.env.example` to `.env` on its own does
-> nothing. You must get the variable into your shell environment.
+Copy the template and fill it in — **`.env` is loaded automatically**, so this is all
+you need:
 
 ```bash
 cp .env.example .env
-# edit .env and paste your key after OPENAI_API_KEY=
-
-# then, in every shell where you run the app:
-set -a && source .env && set +a
 ```
 
-Or skip the file entirely and export it directly:
+```ini
+# Standard OpenAI key
+OPENAI_API_KEY=sk-...
+```
+
+### If your key goes through a gateway
+
+If you were issued a **sub-key** routed through a gateway or proxy rather than talking to
+`api.openai.com` directly, set these instead:
+
+```ini
+# The key, under either name — OPENAI_API_KEY wins if you set both
+KEY_REGULATOR_API_KEY=your-sub-key
+
+# Your gateway's endpoint
+OPENAI_BASE_URL=https://your-gateway.example.com/v1
+
+# Only if your gateway exposes the model under a different id
+OPENAI_MODEL=internal-luna-v2
+```
+
+| Variable | When you need it |
+|---|---|
+| `OPENAI_API_KEY` | The normal case. |
+| `KEY_REGULATOR_API_KEY` | Alternative name for the key, for a gateway-issued sub-key. Used only when `OPENAI_API_KEY` is unset. |
+| `OPENAI_BASE_URL` | Only when *not* calling `api.openai.com` directly. Leave it out otherwise. |
+| `OPENAI_MODEL` | Only when your gateway renames the model. Defaults to `gpt-5.6-luna`. |
+
+> ⚠️ **Don't leave `OPENAI_BASE_URL=` blank.** An empty value is treated as "not set" by
+> this project, but if you remove that handling the OpenAI SDK would resolve it to an
+> empty address and every request would fail with a confusing error. Either give it a
+> real URL or comment the line out.
+
+A real environment variable always wins over `.env`, so you can override any of these for
+a single command:
 
 ```bash
-export OPENAI_API_KEY="sk-..."
+OPENAI_MODEL=some-other-model python manage.py runserver
 ```
 
-Verify it took:
+### Check what the app will actually use
 
 ```bash
-echo "${OPENAI_API_KEY:0:7}..."    # should print sk-... , not just "..."
+python -c "
+import os, django
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings'); django.setup()
+from screening.common.llm import get_client, get_model
+c = get_client()
+print('key    :', c.api_key[:8] + '...')
+print('endpoint:', c.base_url)
+print('model  :', get_model())
+"
 ```
 
-The key is read straight from the environment by the OpenAI client. It is never
-hardcoded, and `.env` is gitignored — keep it that way.
+If the key prints, `.env` is being read. If `endpoint` isn't what you expect, your
+`OPENAI_BASE_URL` isn't reaching the app.
+
+Only Stages 1 and 3, CV structuring and JD extraction use this key — Stage 2 runs the
+embedding model locally and needs no key at all. `.env` is gitignored; keep it that way.
 
 ## 4. Create the database and an admin user
 
@@ -323,7 +363,9 @@ web server, and it is enforced by a check in the test suite.
 | Symptom | Cause and fix |
 |---|---|
 | `ImportError: failed to find libmagic.  Check your installation` | The system library is missing — see [Prerequisites](#1-prerequisites). |
-| `OpenAIError: Missing credentials...set the OPENAI_API_KEY environment variable` | The key isn't in your environment. Copying `.env` is not enough — `set -a && source .env && set +a`. |
+| `No LLM API key found in the environment. Set one of: ...` | Neither key variable is set. Check `.env` exists in the project root and holds `OPENAI_API_KEY` or `KEY_REGULATOR_API_KEY`. |
+| `404` or "model not found" from a gateway | Usually the **model id**, not the key. Gateways often rename models — set `OPENAI_MODEL` to whatever yours exposes. |
+| Connection errors only on Stages 1/3, JD or CV structuring | Those are the LLM calls. Check `OPENAI_BASE_URL` points at your gateway; run the check snippet in [§3](#3-set-your-api-key). |
 | Upload page says the run is at the wrong stage | Confirm the job description first — that is what moves the run to `cv_pending`. |
 | "The job description's requirements have not been confirmed yet" | Press **Confirm requirements and continue** on the JD review page. |
 | Stage 2 hangs on first run | It's downloading the 2 GB model. Watch `~/.cache/huggingface`. |
