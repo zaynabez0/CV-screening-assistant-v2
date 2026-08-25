@@ -7,6 +7,7 @@ quotable basis is not a decision anyone can defend to a rejected candidate.
 
 HARD_FILTER_SCHEMA = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "evaluations": {
             "type": "array",
@@ -18,7 +19,8 @@ HARD_FILTER_SCHEMA = {
                     "evidence": {"type": "string"},
                     "reason": {"type": "string"}
                 },
-                "required": ["requirement", "met", "evidence", "reason"]
+                "required": ["requirement", "met", "evidence", "reason"],
+                "additionalProperties": False
             }
         }
     },
