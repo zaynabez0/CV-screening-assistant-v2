@@ -49,8 +49,9 @@ score for anyone scored at Stage 3.
   ```
 
 - **An OpenAI API key** — needed for CV structuring, Stage 1 and Stage 3.
-- **~2.5 GB of free disk** — Stage 2 downloads the `BAAI/bge-m3` embedding model on
-  first use and caches it in `~/.cache/huggingface`.
+- **~2.5 GB of free disk** — Stage 2 uses a self-hosted embedding model, `BAAI/bge-m3`,
+  downloaded on first use. See [§5](#5-prepare-the-embedding-model) — fetch it before your
+  first run rather than during it.
 
 ## 2. Install
 
@@ -114,7 +115,94 @@ python manage.py runserver
 
 Then open <http://127.0.0.1:8000/admin/> and sign in.
 
-## 5. Start a screening run
+## 5. Prepare the embedding model
+
+Stage 2 ranks candidates by **meaning**, not just keywords — a CV that says
+"server-side programming for web services" scores close to a job description asking for
+"Python backend development", even with no words in common. That is done by a model
+called **`BAAI/bge-m3`**, which runs on your own machine: no API account, no per-use
+cost, no candidate data leaving your computer.
+
+It was chosen for multilingual coverage — French and English CVs land in one ranking
+rather than being ranked by language.
+
+### Download it before your first run
+
+The model is about **2 GB** and is fetched the first time Stage 2 runs. If you skip this
+step, your first Stage 2 will look like it has hung: the download happens inside a
+background process whose output is hidden, so the page just sits at `0 / N` for several
+minutes with no explanation.
+
+Fetch it once, up front, where you can watch the progress bar:
+
+```bash
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-m3')"
+```
+
+Let it finish. Every run after this loads from the local cache in a few seconds.
+
+### Check it works
+
+This prints the actual similarity scores Stage 2 uses — worth running once to see what
+the model is doing before you trust it on real CVs:
+
+```bash
+python -c "
+from screening.stage2_ranking.embeddings import semantic_scores
+jd = 'Python backend development for web services'
+candidates = [
+    'Python backend development for web services',                # identical
+    'Server-side programming in Django and Flask',                # same job, different words
+    'Ingenieur logiciel backend developpant des services web',    # same job, in French
+    'Pastry chef preparing desserts and viennoiseries',           # unrelated
+]
+for text, score in zip(candidates, semantic_scores(jd, candidates)):
+    print(f'{score:.3f}  {text}')
+"
+```
+
+Scores run from -1 to 1. Expect the identical line near 1.0, with the paraphrase and the
+French line clearly above the pastry chef. If the unrelated line scores as high as the
+others, something is wrong — don't trust the Stage 2 ranking until it's fixed.
+
+You can also run the five tests that exercise the real model:
+
+```bash
+python -m pytest screening/tests/test_stage2_embeddings_live.py -v
+```
+
+They skip automatically when the model isn't available, which is why the main test run
+reports 5 skipped until you've downloaded it.
+
+### Where it lives, and working offline
+
+The model is cached in `~/.cache/huggingface/hub`. To keep it somewhere else — a
+different drive, a shared folder — set `HF_HOME` before running anything:
+
+```bash
+export HF_HOME=/path/to/your/cache
+```
+
+Once downloaded, Stage 2 needs no internet at all. To be certain nothing reaches out to
+the network, run with:
+
+```bash
+export HF_HUB_OFFLINE=1
+```
+
+With that set, a missing model fails immediately with a clear error instead of silently
+trying to download.
+
+### If the download fails
+
+| Symptom | What it means |
+|---|---|
+| Hangs, then a connection error | No internet, or a proxy/firewall blocking `huggingface.co`. There is no alternative source — fix the connection. |
+| `No space left on device` | Needs ~2.5 GB free. Check the drive holding `HF_HOME`. |
+| Stage 2 fails but Stages 1 and 3 work | Those use the OpenAI API; only Stage 2 uses this local model. The problem is the model, not your API key. |
+| The process is killed part-way | Usually not enough memory. Close other applications and retry — the download resumes where it stopped. |
+
+## 6. Start a screening run
 
 Open <http://127.0.0.1:8000/> — this lists every run and is where you start new ones.
 
@@ -123,7 +211,7 @@ PDF or DOCX. A scanned PDF with no text layer is rejected; there is no OCR in v1
 
 Creating the run does *not* call the LLM. You land on the job description review page.
 
-## 6. Review the extracted requirements
+## 7. Review the extracted requirements
 
 Press **Extract requirements**. The LLM returns one flat list, each item tagged
 `must_have`, `nice_to_have` or `inferred`. Then check it — this is the highest-leverage
@@ -148,7 +236,7 @@ You cannot confirm an empty list. If there are no `must_have` items you'll get a
 rather than a block — that's legal, it just means Stage 1 has no hard gate and everyone
 passes it.
 
-## 7. Walk the rest of the pipeline
+## 8. Walk the rest of the pipeline
 
 Replace `1` with your run's ID. Each screen has a **Confirm** button that advances the
 run; nothing advances on its own.
@@ -165,8 +253,8 @@ run; nothing advances on its own.
 
 Useful things to know as you go:
 
-- **Stage 2 is slow the first time.** It downloads the ~2 GB embedding model. Later runs
-  load it from cache.
+- **Stage 2 is slow the first time** unless you pre-downloaded the model — see
+  [Prepare the embedding model](#5-prepare-the-embedding-model).
 - **Stages run in a background process** and the page polls for progress. If a stage
   fails, the error appears on the page rather than vanishing.
 - **Changing the Stage 2 cutoff does not require a re-run** — it re-slices the existing
@@ -191,7 +279,7 @@ Stage 1 — nobody silently disappears from the record.
 
 Both files carry candidate names and emails. Treat the downloads as personal data.
 
-## 8. Run the tests
+## 9. Run the tests
 
 ```bash
 python -m pytest              # 317 passed, 5 skipped
@@ -208,7 +296,7 @@ python -m pytest screening/tests/test_stage2_embeddings_live.py -v
 
 No test makes a network call to OpenAI — the LLM is mocked throughout.
 
-## 9. Project layout
+## 10. Project layout
 
 ```
 config/          Django settings, URLs
@@ -230,7 +318,7 @@ The rule that matters: **`screening/` never imports Django.** Django views call 
 never the reverse. That is why the pipeline logic can be tested without a database or a
 web server, and it is enforced by a check in the test suite.
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
@@ -243,7 +331,7 @@ web server, and it is enforced by a check in the test suite.
 | `database is locked` | SQLite limitation: a background stage and the web UI wrote at the same time. Retry. Known and accepted for v1. |
 | A confirmed job description can't be edited | By design — the stages already judged against it would no longer match. Start a new run. |
 
-## 11. Before this goes anywhere near real candidate data
+## 12. Before this goes anywhere near real candidate data
 
 This is a development build. Three things must be fixed first:
 
