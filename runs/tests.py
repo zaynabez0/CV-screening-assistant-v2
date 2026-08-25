@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import pytest
 from django.core.management import CommandError, call_command
+from openpyxl import load_workbook
 from django.urls import reverse
 
 from candidates.models import Candidate
@@ -1515,3 +1516,233 @@ def test_csv_quotes_reasons_containing_commas(client, full_run, recruiter):
 
     assert "Strong, but expensive, and remote-only." in rows[0]["overrides"]
     assert rows[0]["filename"] == "top.pdf"                   # columns still aligned
+
+
+# =============================================================================
+# Excel summary export
+# =============================================================================
+
+def open_xlsx(client, run):
+    """Download the workbook and load it back, as Excel would."""
+    response = client.get(reverse("runs:export_xlsx", args=[run.pk]))
+    assert response.status_code == 200
+    return response, load_workbook(io.BytesIO(response.content))
+
+
+def sheet_rows(sheet, header_row=4):
+    """Data rows as dicts keyed by column title."""
+    titles = [c.value for c in sheet[header_row]]
+    out = []
+    for row in sheet.iter_rows(min_row=header_row + 1, values_only=True):
+        if row[1] is None:
+            continue
+        out.append(dict(zip(titles, row)))
+    return out
+
+
+def test_xlsx_is_served_as_a_spreadsheet_download(client, full_run):
+    response, _ = open_xlsx(client, full_run["run"])
+
+    assert response["Content-Type"] == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    assert f'filename="run-{full_run["run"].pk}-summary.xlsx"' in response["Content-Disposition"]
+
+
+def test_xlsx_has_both_sheets(client, full_run):
+    _, book = open_xlsx(client, full_run["run"])
+
+    assert book.sheetnames == ["Candidates", "Run summary"]
+
+
+def test_every_candidate_gets_a_row_including_those_who_never_ran(client, full_run):
+    """The point of the sheet: nobody disappears. A CV rejected at upload is listed
+    beside the top-scored candidate."""
+    _, book = open_xlsx(client, full_run["run"])
+
+    rows = sheet_rows(book["Candidates"])
+    assert [r["CV file"] for r in rows] == ["top.pdf", "middle.pdf", "filtered.pdf", "scan.pdf"]
+
+
+def test_a_stage1_failure_shows_failed_and_a_brief_reason(client, full_run):
+    _, book = open_xlsx(client, full_run["run"])
+    rows = {r["CV file"]: r for r in sheet_rows(book["Candidates"])}
+
+    failed = rows["filtered.pdf"]
+    assert failed["Stage 1 — hard filter"] == "failed"
+    assert "5+ years Python" in failed["Why they stopped"]
+    assert "No Python experience stated." in failed["Why they stopped"]
+
+
+def test_a_stage1_pass_shows_passed_with_no_failure_reason(client, full_run):
+    _, book = open_xlsx(client, full_run["run"])
+    rows = {r["CV file"]: r for r in sheet_rows(book["Candidates"])}
+
+    assert rows["top.pdf"]["Stage 1 — hard filter"] == "passed"
+    assert not rows["top.pdf"]["Why they stopped"]
+
+
+def test_a_candidate_rejected_at_upload_shows_that_reason(client, full_run):
+    """They never reached Stage 1, so the reason comes from preprocessing instead."""
+    _, book = open_xlsx(client, full_run["run"])
+    rows = {r["CV file"]: r for r in sheet_rows(book["Candidates"])}
+
+    scan = rows["scan.pdf"]
+    assert scan["Preprocessing"] == "rejected"
+    assert scan["Stage 1 — hard filter"] == "not reached"
+    assert scan["Why they stopped"] == "no extractable text found"
+
+
+def test_only_candidates_who_reached_stage3_carry_a_score(client, full_run):
+    _, book = open_xlsx(client, full_run["run"])
+    rows = {r["CV file"]: r for r in sheet_rows(book["Candidates"])}
+
+    assert rows["top.pdf"]["Stage 3 score"] == 82.0
+    for name in ("middle.pdf", "filtered.pdf", "scan.pdf"):
+        assert rows[name]["Stage 3 score"] in (None, "")
+
+
+def test_the_score_is_a_number_excel_can_sort_not_text(client, full_run):
+    """A score stored as text sorts 100 before 9 and breaks every filter."""
+    _, book = open_xlsx(client, full_run["run"])
+    sheet = book["Candidates"]
+
+    score_cell = sheet.cell(row=5, column=10)          # first data row, Stage 3 score
+    assert isinstance(score_cell.value, (int, float))
+    assert score_cell.number_format == "0.0"
+
+
+def test_stage2_rank_and_shortlist_status_are_shown(client, full_run):
+    _, book = open_xlsx(client, full_run["run"])
+    rows = {r["CV file"]: r for r in sheet_rows(book["Candidates"])}
+
+    assert rows["top.pdf"]["Stage 2 rank"] == 1
+    assert rows["top.pdf"]["Stage 2 — ranking"] == "shortlisted"
+    assert rows["middle.pdf"]["Stage 2 — ranking"] == "below cutoff"
+    assert rows["filtered.pdf"]["Stage 2 — ranking"] == "not reached"
+
+
+def test_low_confidence_criteria_are_listed(client, full_run):
+    score_stage3(full_run["run"], full_run["middle"], final_score=55.0,
+                 low_confidence=["Team leadership"])
+
+    _, book = open_xlsx(client, full_run["run"])
+    rows = {r["CV file"]: r for r in sheet_rows(book["Candidates"])}
+
+    assert rows["middle.pdf"]["Low-confidence criteria"] == "Team leadership"
+
+
+def test_an_override_appears_with_its_author_and_reason(client, full_run, recruiter):
+    client.force_login(recruiter)
+    client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                {"candidate_id": full_run["filtered"].pk, "action": "reinstate",
+                 "reason": "Ten years of Go, equivalent."})
+
+    _, book = open_xlsx(client, full_run["run"])
+    rows = {r["CV file"]: r for r in sheet_rows(book["Candidates"])}
+
+    cell = rows["filtered.pdf"]["Recruiter overrides"]
+    assert "Reinstate" in cell and "hr_amine" in cell and "Ten years of Go" in cell
+
+
+def test_an_adjusted_score_is_the_one_shown(client, full_run, recruiter):
+    client.force_login(recruiter)
+    client.post(reverse("runs:create_override", args=[full_run["run"].pk]),
+                {"candidate_id": full_run["top"].pk, "action": "adjust_score",
+                 "adjusted_score": "55", "reason": "Overstated evidence."})
+
+    _, book = open_xlsx(client, full_run["run"])
+    rows = {r["CV file"]: r for r in sheet_rows(book["Candidates"])}
+
+    assert rows["top.pdf"]["Stage 3 score"] == 55.0
+    assert "82" in rows["top.pdf"]["Recruiter overrides"] or "adjust" in rows["top.pdf"]["Recruiter overrides"].lower()
+
+
+# --- The run summary sheet ---------------------------------------------------------
+
+def summary_facts(book):
+    return {row[0]: row[1] for row in book["Run summary"].iter_rows(values_only=True)
+            if row[0] and row[1] is not None}
+
+
+def test_the_summary_sheet_counts_each_stage(client, full_run):
+    _, book = open_xlsx(client, full_run["run"])
+    facts = summary_facts(book)
+
+    assert facts["Candidates uploaded"] == 4
+    assert facts["Passed Stage 1"] == 2
+    assert facts["Filtered out at Stage 1"] == 1
+    assert facts["Scored at Stage 3"] == 1
+
+
+def test_the_summary_sheet_records_the_settings_the_stages_ran_with(client, full_run):
+    """Without these, the scores on sheet 1 cannot be interpreted later."""
+    full_run["run"].stage2_keywords = ["Python", "Django"]
+    full_run["run"].save()
+
+    _, book = open_xlsx(client, full_run["run"])
+    facts = summary_facts(book)
+
+    assert "50%" in str(facts["Shortlist cutoff"])
+    assert facts["Stage 2 keywords"] == "Python, Django"
+
+
+def test_the_summary_sheet_lists_the_job_requirements_with_their_types(client, full_run):
+    _, book = open_xlsx(client, full_run["run"])
+    values = [cell for row in book["Run summary"].iter_rows(values_only=True)
+              for cell in row if cell]
+
+    assert "5+ years Python" in values
+    assert "must_have" in values
+    assert "nice_to_have" in values
+
+
+# --- Robustness --------------------------------------------------------------------
+
+def test_the_export_works_on_a_run_where_nothing_has_run_yet(client):
+    """A run abandoned after upload still exports — the record should not depend on
+    the pipeline having finished."""
+    run = review_run()
+    add_candidate(run, "only.pdf")
+
+    _, book = open_xlsx(client, run)
+    rows = sheet_rows(book["Candidates"])
+
+    assert len(rows) == 1
+    assert rows[0]["Stage 1 — hard filter"] == "not reached"
+    assert rows[0]["Stage 3 score"] in (None, "")
+
+
+def test_the_export_works_on_a_run_with_no_candidates(client):
+    run = review_run()
+
+    _, book = open_xlsx(client, run)
+
+    assert sheet_rows(book["Candidates"]) == []
+    assert summary_facts(book)["Candidates uploaded"] == 0
+
+
+def test_many_unmet_requirements_are_truncated_not_dumped(client):
+    """A candidate failing ten must-haves should not produce an unreadable cell."""
+    run = review_run()
+    candidate = add_candidate(run, "many.pdf")
+    StageResult.objects.create(
+        run=run, candidate=candidate, stage="stage1", passed=False,
+        output_json={"evaluations": [
+            {"requirement": f"Requirement {i}", "met": False, "evidence": "",
+             "reason": f"Reason {i}."} for i in range(10)]})
+
+    _, book = open_xlsx(client, run)
+    cell = sheet_rows(book["Candidates"])[0]["Why they stopped"]
+
+    assert "Requirement 0" in cell
+    assert "+7 more" in cell
+    assert "Requirement 9" not in cell
+
+
+def test_the_sheet_is_filterable_and_the_header_stays_visible(client, full_run):
+    """Small things, but they are what make a 60-row sheet usable."""
+    _, book = open_xlsx(client, full_run["run"])
+    sheet = book["Candidates"]
+
+    assert sheet.freeze_panes == "A5"
+    assert sheet.auto_filter.ref == "A4:L8"

@@ -18,5 +18,8 @@ numpy
 # Stage 2 - keyword matching
 rapidfuzz
 
+# Excel export of the run summary
+openpyxl
+
 # Tests
 pytest-django
