@@ -10,26 +10,21 @@ UI preference.
 
 ---
 
-## Current status — read this before you start
+## Current status
 
-The pipeline is built and tested from CV upload through to Final Review. **JD Processing
-is not built yet.** That has one practical consequence you will hit immediately:
-
-> A new screening run starts at `jd_pending`, and **nothing in the app can move it to
-> `cv_pending`**. You must create the job description and advance the run by hand in the
-> Django admin. [Step 5](#5-create-your-first-screening-run) explains how.
+The pipeline runs end to end in the browser, from pasting a job description through to
+exporting the final ranked list.
 
 | Part of the pipeline | Status |
 |---|---|
+| JD processing — text/file input, requirement extraction, review & edit | ✅ built and tested |
 | Shared text extraction (PDF/DOCX) | ✅ built and tested |
 | CV preprocessing — upload, validation, structuring, review | ✅ built and tested |
 | Stage 1 — hard filter | ✅ built and tested |
 | Stage 2 — ranking | ✅ built and tested |
 | Stage 3 — scoring | ✅ built and tested |
 | Final Review — history, overrides, CSV export | ✅ built and tested |
-| **JD Processing — text/file input, requirement extraction, edit UI** | ❌ **not built** |
-| Creating a run from the web UI | ❌ not built (use the admin) |
-| Closing a run (`done` state) | ❌ not built |
+| Closing a run (the `done` state) | ❌ not built — `review` is the last stage reachable |
 
 ---
 
@@ -115,67 +110,48 @@ python manage.py runserver
 
 Then open <http://127.0.0.1:8000/admin/> and sign in.
 
-## 5. Create your first screening run
+## 5. Start a screening run
 
-Because JD Processing isn't built, this part happens in the admin.
+Open <http://127.0.0.1:8000/> — this lists every run and is where you start new ones.
 
-**a. Create a Job Description** — `Jobs → Job descriptions → Add`
-(<http://127.0.0.1:8000/admin/jobs/jobdescription/add/>):
+Press **Start a new run**, then either paste the job description text or upload it as a
+PDF or DOCX. A scanned PDF with no text layer is rejected; there is no OCR in v1.
 
-- **Input mode**: `Free text`
-- **Raw text**: paste the job description (for your own reference; nothing parses it yet)
-- **Requirements**: paste a JSON list. This is the list JD extraction *would* have
-  produced. Each item needs all five fields:
+Creating the run does *not* call the LLM. You land on the job description review page.
 
-  ```json
-  [
-    {
-      "requirement": "5+ years of professional Python experience",
-      "description": "Hard requirement stated in the job description",
-      "type": "must_have",
-      "scale": "",
-      "suggested_weight": 0
-    },
-    {
-      "requirement": "Experience with Django or a similar web framework",
-      "description": "Stated as a plus",
-      "type": "nice_to_have",
-      "scale": "5=deep framework experience, 3=some exposure, 1=none",
-      "suggested_weight": 3
-    },
-    {
-      "requirement": "Team leadership",
-      "description": "Implied by the seniority of the role",
-      "type": "inferred",
-      "scale": "5=led teams, 3=mentored, 1=none",
-      "suggested_weight": 1
-    }
-  ]
-  ```
+## 6. Review the extracted requirements
 
-  `type` must be one of `must_have`, `nice_to_have`, `inferred`. Must-haves are gated
-  pass/fail in Stage 1; the other two become Stage 3's scoring criteria. For must-haves
-  set `scale` to `""` and `suggested_weight` to `0` — both are unused for that type.
+Press **Extract requirements**. The LLM returns one flat list, each item tagged
+`must_have`, `nice_to_have` or `inferred`. Then check it — this is the highest-leverage
+screen in the whole tool, because that single tag decides how each requirement is used:
 
-- **Confirmed by user**: ✅ **tick this.** Stages 1–3 refuse to run against an
-  unconfirmed job description.
+- **`must_have`** → gated pass/fail in Stage 1. A candidate missing any one of these is
+  filtered out, so an over-tagged must-have costs you good candidates.
+- **`nice_to_have`** and **`inferred`** → become Stage 3's scoring criteria, each with a
+  1–5 scale and a weight.
 
-**b. Create a Screening Run** — `Runs → Screening runs → Add`
-(<http://127.0.0.1:8000/admin/runs/screeningrun/add/>):
+On this page you can change any requirement's **type**, edit its text or description,
+delete it, or add one the model missed. Switching a row to `must_have` clears its scale
+and weight automatically, since Stage 3 never reads them for that type.
 
-- **Job description**: the one you just made
-- **Current stage**: set it to **`Awaiting CV upload and preprocessing`** (`cv_pending`)
-- Leave everything else at its default
+Press **Confirm requirements and continue** when the list is right. Confirming:
 
-Note the run's ID from the URL — you need it for every page below.
+- locks the list — **it cannot be edited afterwards**, because the stages that run
+  against it would no longer match what they were judged on;
+- moves the run to `cv_pending` and sends you to CV upload.
 
-## 6. Walk the pipeline
+You cannot confirm an empty list. If there are no `must_have` items you'll get a warning
+rather than a block — that's legal, it just means Stage 1 has no hard gate and everyone
+passes it.
+
+## 7. Walk the rest of the pipeline
 
 Replace `1` with your run's ID. Each screen has a **Confirm** button that advances the
 run; nothing advances on its own.
 
 | Step | URL | What you do |
 |---|---|---|
+| 0 | `/run/1/jd/review/` | (above) Extract, edit and confirm requirements → `cv_pending` |
 | 1 | `/run/1/cvs/upload/` | Upload PDF/DOCX CVs. This only **validates** — no LLM call yet. |
 | 2 | `/run/1/cvs/review/` | Press **Structure** to send them to the LLM, check each extraction, then **Confirm** → `stage1_pending` |
 | 3 | `/run/1/stage1/review/` | **Run Stage 1**, read every pass *and* fail with reasons, then **Confirm** → `stage2_pending` |
@@ -197,10 +173,10 @@ Useful things to know as you go:
 - **Logging an override requires being signed in** (overrides record who made them), and
   every override needs a written reason.
 
-## 7. Run the tests
+## 8. Run the tests
 
 ```bash
-python -m pytest              # 243 passed, 5 skipped
+python -m pytest              # 298 passed, 5 skipped
 python -m pytest -v           # see individual test names
 ```
 
@@ -214,40 +190,41 @@ python -m pytest screening/tests/test_stage2_embeddings_live.py -v
 
 No test makes a network call to OpenAI — the LLM is mocked throughout.
 
-## 8. Project layout
+## 9. Project layout
 
 ```
 config/          Django settings, URLs
 screening/       ALL pipeline logic — pure Python, ZERO Django imports
   common/          shared text extraction (PDF/DOCX) + the one LLM helper
-  jd/              (empty — JD extraction not built)
+  jd/              JD_SCHEMA, get_jd_text, extract_requirements
   cv/              validation, CV_SCHEMA structuring, anonymization
   stage1_hard_filter/
   stage2_ranking/
   stage3_scoring/
   tests/           pytest suite + fixtures
 candidates/      Candidate model, upload & review views
-jobs/            JobDescription model (models only)
-runs/            ScreeningRun, StageResult, Override, stage views, CSV export
+jobs/            JobDescription model, JD input + review/edit views
+runs/            ScreeningRun, StageResult, Override, run list, stage views, CSV export
 ```
 
 The rule that matters: **`screening/` never imports Django.** Django views call into it,
 never the reverse. That is why the pipeline logic can be tested without a database or a
 web server, and it is enforced by a check in the test suite.
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
 | `ImportError: failed to find libmagic.  Check your installation` | The system library is missing — see [Prerequisites](#1-prerequisites). |
 | `OpenAIError: Missing credentials...set the OPENAI_API_KEY environment variable` | The key isn't in your environment. Copying `.env` is not enough — `set -a && source .env && set +a`. |
-| Upload page says the run is at the wrong stage | `current_stage` must be `cv_pending`. Change it in the admin. |
-| "The job description's requirements have not been confirmed yet" | Tick **Confirmed by user** on the JobDescription. |
+| Upload page says the run is at the wrong stage | Confirm the job description first — that is what moves the run to `cv_pending`. |
+| "The job description's requirements have not been confirmed yet" | Press **Confirm requirements and continue** on the JD review page. |
 | Stage 2 hangs on first run | It's downloading the 2 GB model. Watch `~/.cache/huggingface`. |
 | A stage says "failed" with a network error | Expected if the API is unreachable. Fix the connection and press the button again — re-running replaces the previous results rather than duplicating them. |
 | `database is locked` | SQLite limitation: a background stage and the web UI wrote at the same time. Retry. Known and accepted for v1. |
+| A confirmed job description can't be edited | By design — the stages already judged against it would no longer match. Start a new run. |
 
-## 10. Before this goes anywhere near real candidate data
+## 11. Before this goes anywhere near real candidate data
 
 This is a development build. Three things must be fixed first:
 

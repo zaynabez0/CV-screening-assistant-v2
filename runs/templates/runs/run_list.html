@@ -1,0 +1,30 @@
+{% extends "candidates/base.html" %}
+{% block title %}Screening runs{% endblock %}
+{% block heading %}Screening runs{% endblock %}
+
+{% block content %}
+  <p><a href="{% url 'jobs:run_create' %}"><button type="button">Start a new run</button></a></p>
+
+  {% if rows %}
+    <table>
+      <thead>
+        <tr><th>Run</th><th>Stage</th><th>Requirements</th><th>Candidates</th><th>Created</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td><strong>#{{ row.run.pk }}</strong></td>
+            <td><span class="badge">{{ row.run.get_current_stage_display }}</span></td>
+            <td>{{ row.requirement_count }}{% if not row.run.job_description.confirmed_by_user %}
+                <span class="muted">(unconfirmed)</span>{% endif %}</td>
+            <td>{{ row.candidate_count }}</td>
+            <td class="muted">{{ row.run.created_at|date:"Y-m-d H:i" }}</td>
+            <td><a href="{{ row.next_url }}">Continue &rarr;</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No runs yet. Start one to begin screening.</p>
+  {% endif %}
+{% endblock %}

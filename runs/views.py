@@ -13,6 +13,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 
 from candidates.models import Candidate
 
@@ -619,3 +620,32 @@ def export_csv(request, run_id):
         ])
 
     return response
+
+
+# --- Run list -------------------------------------------------------------------
+
+# Where each stage's checkpoint lives, so the list can link straight to it.
+STAGE_URLS = {
+    "jd_pending": "jobs:jd_review",
+    "cv_pending": "candidates:review",
+    "stage1_pending": "runs:stage1_review",
+    "stage2_pending": "runs:stage2_review",
+    "stage3_pending": "runs:stage3_review",
+    "review": "runs:final_review",
+    "done": "runs:final_review",
+}
+
+
+def run_list(request):
+    """Every screening run and where each one is. The application's front door."""
+    runs = (
+        ScreeningRun.objects.select_related("job_description")
+        .order_by("-created_at", "-pk")
+    )
+    rows = [{
+        "run": run,
+        "next_url": reverse(STAGE_URLS[run.current_stage], args=[run.pk]),
+        "requirement_count": len(run.job_description.requirements or []),
+        "candidate_count": Candidate.objects.filter(run=run).count(),
+    } for run in runs]
+    return render(request, "runs/run_list.html", {"rows": rows})
