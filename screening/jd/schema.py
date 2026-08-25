@@ -8,6 +8,7 @@ at the review checkpoint without any other data changing shape.
 
 JD_SCHEMA = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "requirements": {
             "type": "array",
@@ -20,7 +21,8 @@ JD_SCHEMA = {
                     "scale": {"type": "string"},          # "5=<strong evidence>, 3=<meets baseline>, 1=<no evidence>" — used by Stage 3 only, ignored for must_have
                     "suggested_weight": {"type": "number"}  # used by Stage 3 only, ignored for must_have
                 },
-                "required": ["requirement", "description", "type", "scale", "suggested_weight"]
+                "required": ["requirement", "description", "type", "scale", "suggested_weight"],
+                "additionalProperties": False
             }
         }
     },

@@ -8,6 +8,7 @@ names it doesn't recognise.
 
 SCORE_SCHEMA = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "criterion_scores": {
             "type": "array",
@@ -20,7 +21,8 @@ SCORE_SCHEMA = {
                     "reasoning": {"type": "string"},
                     "confidence": {"type": "string", "enum": ["high", "medium", "low"]}
                 },
-                "required": ["criterion", "score", "evidence_quote", "reasoning", "confidence"]
+                "required": ["criterion", "score", "evidence_quote", "reasoning", "confidence"],
+                "additionalProperties": False
             }
         }
     },

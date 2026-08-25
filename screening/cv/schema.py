@@ -7,6 +7,7 @@ required: a missing key downstream is a bug, never a "maybe the LLM omitted it".
 
 CV_SCHEMA = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "full_name": {"type": "string"},
         "email": {"type": "string"},
@@ -16,7 +17,7 @@ CV_SCHEMA = {
             "items": {"type": "object", "properties": {
                 "language": {"type": "string"},
                 "proficiency": {"type": "string", "enum": ["native", "fluent", "professional", "basic"]}
-            }, "required": ["language", "proficiency"]}
+            }, "required": ["language", "proficiency"], "additionalProperties": False}
         },
         "education": {
             "type": "array",
@@ -25,7 +26,7 @@ CV_SCHEMA = {
                 "field": {"type": "string"},
                 "institution": {"type": "string"},
                 "end_year": {"type": ["integer", "null"]}
-            }, "required": ["degree", "field", "institution", "end_year"]}
+            }, "required": ["degree", "field", "institution", "end_year"], "additionalProperties": False}
         },
         "experience": {
             "type": "array",
@@ -36,7 +37,8 @@ CV_SCHEMA = {
                 "end_date": {"type": ["string", "null"]},
                 "description": {"type": "string"},
                 "evidence_quote": {"type": "string"}
-            }, "required": ["title", "company", "start_date", "end_date", "description", "evidence_quote"]}
+            }, "required": ["title", "company", "start_date", "end_date", "description",
+                            "evidence_quote"], "additionalProperties": False}
         },
         "skills": {"type": "array", "items": {"type": "string"}},
         "total_years_experience": {"type": "number"},
