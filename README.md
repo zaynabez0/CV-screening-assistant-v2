@@ -23,8 +23,12 @@ exporting the final ranked list.
 | Stage 1 — hard filter | ✅ built and tested |
 | Stage 2 — ranking | ✅ built and tested |
 | Stage 3 — scoring | ✅ built and tested |
-| Final Review — history, overrides, CSV export | ✅ built and tested |
+| Final Review — history, overrides, Excel + CSV export | ✅ built and tested |
 | Closing a run (the `done` state) | ❌ not built — `review` is the last stage reachable |
+
+The Excel summary is the deliverable at the end of a run: one row per candidate,
+which stages they passed or failed, why they stopped where they did, and the final
+score for anyone scored at Stage 3.
 
 ---
 
@@ -157,7 +161,7 @@ run; nothing advances on its own.
 | 3 | `/run/1/stage1/review/` | **Run Stage 1**, read every pass *and* fail with reasons, then **Confirm** → `stage2_pending` |
 | 4 | `/run/1/stage2/review/` | Edit keywords and the cutoff %, **Run Stage 2**, then **Confirm** → `stage3_pending` |
 | 5 | `/run/1/stage3/review/` | Adjust criterion weights, **Run Stage 3**, then **Confirm** → `review` |
-| 6 | `/run/1/review/` | Full history per candidate, log overrides, export CSV |
+| 6 | `/run/1/review/` | Full history per candidate, log overrides, download the Excel summary or the CSV |
 
 Useful things to know as you go:
 
@@ -173,10 +177,24 @@ Useful things to know as you go:
 - **Logging an override requires being signed in** (overrides record who made them), and
   every override needs a written reason.
 
+### The two exports
+
+Both cover **every** candidate, including those rejected at upload or filtered at
+Stage 1 — nobody silently disappears from the record.
+
+| | **Excel summary** (`export.xlsx`) | **CSV** (`export.csv`) |
+|---|---|---|
+| For | reading, and sending to a hiring manager | audit, and loading into other tools |
+| Sheet 1 | one row per candidate: outcome, stage-by-stage verdicts, why they stopped, Stage 3 score, low-confidence criteria, overrides | one row per candidate with **every** per-requirement reason in full |
+| Sheet 2 | the run's settings — cutoff, keywords, and the job requirements with their types — so the scores can still be interpreted months later | — |
+| Formatting | frozen header, filters, pass/fail colouring, scores as real numbers you can sort | plain text |
+
+Both files carry candidate names and emails. Treat the downloads as personal data.
+
 ## 8. Run the tests
 
 ```bash
-python -m pytest              # 298 passed, 5 skipped
+python -m pytest              # 317 passed, 5 skipped
 python -m pytest -v           # see individual test names
 ```
 
@@ -204,7 +222,8 @@ screening/       ALL pipeline logic — pure Python, ZERO Django imports
   tests/           pytest suite + fixtures
 candidates/      Candidate model, upload & review views
 jobs/            JobDescription model, JD input + review/edit views
-runs/            ScreeningRun, StageResult, Override, run list, stage views, CSV export
+runs/            ScreeningRun, StageResult, Override, run list, stage views,
+                 exports.py (Excel summary) + CSV export
 ```
 
 The rule that matters: **`screening/` never imports Django.** Django views call into it,

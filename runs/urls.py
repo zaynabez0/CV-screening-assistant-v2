@@ -24,4 +24,5 @@ urlpatterns = [
     path("run/<int:run_id>/review/", views.final_review, name="final_review"),
     path("run/<int:run_id>/review/override/", views.create_override, name="create_override"),
     path("run/<int:run_id>/review/export.csv", views.export_csv, name="export_csv"),
+    path("run/<int:run_id>/review/export.xlsx", views.export_xlsx, name="export_xlsx"),
 ]

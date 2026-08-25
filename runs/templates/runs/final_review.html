@@ -9,9 +9,13 @@
      rejects anyone on its own.</p>
 
   <p>
-    <a href="{% url 'runs:export_csv' run.pk %}"><button type="button">Export CSV (all {{ rows|length }} candidates)</button></a>
-    <span class="muted">Includes names and emails — treat the file as personal data.</span>
+    <a href="{% url 'runs:export_xlsx' run.pk %}"><button type="button">Download Excel summary</button></a>
+    <a href="{% url 'runs:export_csv' run.pk %}"><button type="button" class="secondary">Export CSV (full rationale)</button></a>
   </p>
+  <p class="muted">The Excel file summarises all {{ rows|length }} candidates — which stages
+     each passed or failed, why, and the final score for anyone scored at Stage&nbsp;3. The
+     CSV carries every per-requirement reason in full, for audit. Both include candidate
+     names and emails: treat the downloads as personal data.</p>
 
   {% if stage3_skipped %}
     <p class="msg warning">Stage 3 was skipped for this run (the JD had no scorable

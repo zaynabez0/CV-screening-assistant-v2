@@ -17,6 +17,7 @@ from django.urls import reverse
 
 from candidates.models import Candidate
 
+from .exports import build_summary_workbook
 from .models import Override, ScreeningRun, StageResult
 from screening.stage2_ranking.keywords import seed_keywords
 from screening.stage2_ranking.ranking import shortlist_size
@@ -649,3 +650,21 @@ def run_list(request):
         "candidate_count": Candidate.objects.filter(run=run).count(),
     } for run in runs]
     return render(request, "runs/run_list.html", {"rows": rows})
+
+
+def export_xlsx(request, run_id):
+    """The run as an Excel workbook: per-candidate outcomes plus the run's settings.
+
+    The readable companion to the CSV. Same underlying data (candidate_history), but
+    formatted for a person rather than a parser — and, like the CSV, it carries
+    candidate names, so treat the download as personal data.
+    """
+    run = get_object_or_404(ScreeningRun, pk=run_id)
+    workbook = build_summary_workbook(run)
+
+    response = HttpResponse(
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    response["Content-Disposition"] = f'attachment; filename="run-{run.pk}-summary.xlsx"'
+    workbook.save(response)
+    return response
