@@ -39,6 +39,9 @@
     th { font-size:.78rem; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); }
     tr.row-unmet td { background:#fdecea; }
     tr.row-below-cut td { color:var(--muted); background:#fafafa; }
+    tr.row-must td { background:#f4f8ff; }
+    input[type=text] { font:inherit; padding:.35rem .5rem; border:1px solid var(--line);
+                       border-radius:6px; }
     textarea { font:inherit; padding:.5rem; border:1px solid var(--line); border-radius:6px; }
     input[type=number] { font:inherit; padding:.35rem .5rem; border:1px solid var(--line);
                          border-radius:6px; width:6rem; }
@@ -52,7 +55,8 @@
 </head>
 <body>
   <h1>{% block heading %}{% endblock %}</h1>
-  <p class="sub">Run #{{ run.pk }} — {{ run.get_current_stage_display }}</p>
+  {% if run %}<p class="sub">Run #{{ run.pk }} — {{ run.get_current_stage_display }}</p>
+  {% else %}<p class="sub">CV Screening Assistant</p>{% endif %}
 
   {% if messages %}{% for m in messages %}
     <p class="msg {{ m.tags }}">{{ m }}</p>

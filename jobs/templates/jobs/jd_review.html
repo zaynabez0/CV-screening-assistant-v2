@@ -1,0 +1,123 @@
+{% extends "candidates/base.html" %}
+{% block title %}Job description review{% endblock %}
+{% block heading %}Job description — review requirements{% endblock %}
+
+{% block content %}
+  <p>One flat list. Each requirement's <strong>type</strong> decides how it is used:
+     <em>must-have</em> is gated pass/fail in Stage&nbsp;1; <em>nice-to-have</em> and
+     <em>inferred</em> become Stage&nbsp;3's scoring criteria. Fixing a miscategorised
+     requirement here is the single highest-leverage edit in the whole pipeline.</p>
+
+  {% if locked %}
+    <p class="msg success">This job description is <strong>confirmed and locked</strong>.
+       {{ requirements|length }} requirement(s) are driving the run.</p>
+  {% endif %}
+
+  <details {% if not has_requirements %}open{% endif %}>
+    <summary>The job description as submitted ({{ jd.get_input_mode_display }})</summary>
+    {% if jd.input_mode == "upload" %}
+      <p class="muted">Uploaded file: {{ jd.raw_file.name }}</p>
+    {% else %}
+      <pre>{{ jd.raw_text }}</pre>
+    {% endif %}
+  </details>
+
+  {% if not locked %}
+    <form method="post" action="{% url 'jobs:jd_extract' run.pk %}">
+      {% csrf_token %}
+      <button type="submit" {% if blocked %}disabled{% endif %}>
+        {% if has_requirements %}Re-extract from the job description{% else %}Extract requirements{% endif %}
+      </button>
+      {% if has_requirements %}
+        <span class="muted">Re-extracting replaces the list below and discards your edits.</span>
+      {% endif %}
+    </form>
+  {% endif %}
+
+  {% if has_requirements %}
+    {% if not must_have_count %}
+      <p class="msg warning">No <strong>must-have</strong> requirements. Stage 1 will have no
+         hard gate and every candidate will pass it. Legal, but rarely intended.</p>
+    {% endif %}
+
+    <h2>Requirements ({{ requirements|length }})</h2>
+    <form method="post" action="{% url 'jobs:jd_save' run.pk %}">
+      {% csrf_token %}
+      <table>
+        <thead>
+          <tr><th>Requirement</th><th>Type</th><th>Scale (Stage 3)</th><th>Weight</th><th>Delete</th></tr>
+        </thead>
+        <tbody>
+          {% for r in requirements %}
+            <tr class="{% if r.type == 'must_have' %}row-must{% endif %}">
+              <td>
+                <input type="text" name="req-{{ r.index }}-requirement" value="{{ r.requirement }}"
+                       size="34" {% if locked %}disabled{% endif %}><br>
+                <textarea name="req-{{ r.index }}-description" rows="2" cols="36"
+                          {% if locked %}disabled{% endif %}>{{ r.description }}</textarea>
+              </td>
+              <td>
+                <select name="req-{{ r.index }}-type" {% if locked %}disabled{% endif %}>
+                  {% for t in requirement_types %}
+                    <option value="{{ t }}" {% if r.type == t %}selected{% endif %}>{{ t }}</option>
+                  {% endfor %}
+                </select>
+              </td>
+              <td>
+                <textarea name="req-{{ r.index }}-scale" rows="2" cols="26"
+                          {% if locked %}disabled{% endif %}>{{ r.scale }}</textarea>
+                <br><span class="muted">Ignored for must-have.</span>
+              </td>
+              <td><input type="number" name="req-{{ r.index }}-suggested_weight" step="0.1" min="0"
+                         value="{{ r.suggested_weight }}" style="width:5rem"
+                         {% if locked %}disabled{% endif %}></td>
+              <td style="text-align:center">
+                <input type="checkbox" name="req-{{ r.index }}-delete" {% if locked %}disabled{% endif %}>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if not locked %}
+        <p><button type="submit" {% if blocked %}disabled{% endif %}>Save changes</button>
+           <span class="muted">Applies edits and removes anything ticked for deletion.</span></p>
+      {% endif %}
+    </form>
+  {% endif %}
+
+  {% if not locked %}
+    <h2>Add a requirement</h2>
+    <form method="post" action="{% url 'jobs:jd_add' run.pk %}">
+      {% csrf_token %}
+      <p>
+        <input type="text" name="new-requirement" placeholder="Requirement" size="34" required
+               {% if blocked %}disabled{% endif %}>
+        <select name="new-type" {% if blocked %}disabled{% endif %}>
+          {% for t in requirement_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+        </select>
+        <input type="number" name="new-suggested_weight" step="0.1" min="0" value="1"
+               style="width:5rem" {% if blocked %}disabled{% endif %}>
+      </p>
+      <p>
+        <input type="text" name="new-description" placeholder="Description" size="46"
+               {% if blocked %}disabled{% endif %}>
+        <input type="text" name="new-scale" placeholder="5=…, 3=…, 1=… (Stage 3 only)" size="40"
+               {% if blocked %}disabled{% endif %}>
+      </p>
+      <button type="submit" {% if blocked %}disabled{% endif %}>Add requirement</button>
+    </form>
+
+    <h2>Confirm</h2>
+    <p>Confirming locks this list and opens CV upload. <strong>Nothing downstream reads an
+       unconfirmed list</strong>, and the list cannot be edited afterwards — the stages that
+       run against it would no longer match.</p>
+    <form method="post" action="{% url 'jobs:jd_confirm' run.pk %}">
+      {% csrf_token %}
+      <button type="submit" {% if blocked or not has_requirements %}disabled{% endif %}>
+        Confirm requirements and continue
+      </button>
+    </form>
+  {% else %}
+    <p><a href="{% url 'candidates:upload' run.pk %}">Continue to CV upload &rarr;</a></p>
+  {% endif %}
+{% endblock %}

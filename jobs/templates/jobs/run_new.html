@@ -1,0 +1,33 @@
+{% extends "candidates/base.html" %}
+{% block title %}New screening run{% endblock %}
+{% block heading %}Start a new screening run{% endblock %}
+
+{% block content %}
+  <p>Provide the job description as text or as a file. Requirements are extracted in the
+     next step — you review and edit them before anything else happens.</p>
+
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+
+    <p>
+      <label><input type="radio" name="input_mode" value="text" checked> Paste the text</label>
+      &nbsp;&nbsp;
+      <label><input type="radio" name="input_mode" value="upload"> Upload a file (PDF or DOCX)</label>
+    </p>
+
+    <p>
+      <label for="raw_text">Job description text</label><br>
+      <textarea id="raw_text" name="raw_text" rows="14" cols="80">{{ raw_text|default:"" }}</textarea>
+    </p>
+
+    <p>
+      <label for="raw_file">…or a file</label><br>
+      <input id="raw_file" type="file" name="raw_file" accept=".pdf,.docx">
+      <br><span class="muted">PDF and DOCX only. A scanned PDF with no text layer is
+      rejected — there is no OCR in v1.</span>
+    </p>
+
+    <button type="submit">Create run</button>
+    <a href="{% url 'runs:run_list' %}" class="muted" style="margin-left:1rem">Cancel</a>
+  </form>
+{% endblock %}
