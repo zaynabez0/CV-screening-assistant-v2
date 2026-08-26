@@ -14,8 +14,9 @@
       {% csrf_token %}
       <button type="submit">Skip Stage 3 and go to Final Review</button>
     </form>
-  {% else %}
+  {% elif step_done %}
     <p class="msg success">Stage 3 was skipped. The Stage 2 ranking is the final order.</p>
+    <p><a href="{% url 'runs:final_review' run.pk %}">Continue to Final Review &rarr;</a></p>
   {% endif %}
 
 {% else %}
@@ -136,6 +137,11 @@
         {% csrf_token %}
         <button type="submit">Confirm Stage 3 and continue</button>
       </form>
+    {% elif step_done %}
+      <h2>Confirmed</h2>
+      <p class="msg success">Stage 3 is confirmed — these scores are carried into Final
+         Review, and are read-only from here.</p>
+      <p><a href="{% url 'runs:final_review' run.pk %}">Continue to Final Review &rarr;</a></p>
     {% endif %}
   {% elif run.job_status != "running" %}
     <p class="muted">Stage 3 has not run yet for this run.</p>

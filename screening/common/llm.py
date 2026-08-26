@@ -4,7 +4,9 @@ JD extraction, CV structuring, Stage 1 and Stage 3 all go through `call_structur
 instead of four slightly different implementations.
 
 Configuration comes from the environment only — never Django settings, because this
-package must stay importable with zero Django imports:
+package must stay importable with zero Django imports. The project's `.env` is loaded
+here as well as in config/settings.py, so a plain `python some_script.py` that never
+touches Django still finds the key without exporting it in the shell first:
 
    
     KEY_REGULATOR_API_KEY   alternative name, for a gateway-issued sub-key.
@@ -20,8 +22,23 @@ exactly what the two arguments are for.
 
 import json
 import os
+from pathlib import Path
 
+from dotenv import load_dotenv
 from openai import OpenAI
+
+# Load the project's .env at import, so every entry point is configured the same way:
+# the Django server, the stage subprocesses, pytest, and a bare script run by hand.
+# Two deliberate choices:
+#   * the path is explicit rather than dotenv's search-upwards default, which resolves
+#     relative to *this file* and would quietly pick up a stray .env in some parent
+#     directory if the package were ever installed elsewhere;
+#   * load_dotenv does not overwrite variables that are already set, so a real shell
+#     variable still wins over .env — the override documented in the README.
+# A missing .env is not an error: on a machine configured with real environment
+# variables there is nothing to load.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / ".env")
 
 DEFAULT_MODEL = "gpt-5.6-luna"
 

@@ -71,7 +71,9 @@ download.
 ## 3. Set your API key
 
 Copy the template and fill it in — **`.env` is loaded automatically**, so this is all
-you need:
+you need. Nothing has to be exported in your shell, on any platform: both
+`config/settings.py` and `screening/common/llm.py` load it, so the web server, the stage
+subprocesses, the tests and a plain `python your_script.py` all see the same values.
 
 ```bash
 cp .env.example .env
@@ -121,20 +123,17 @@ OPENAI_MODEL=some-other-model python manage.py runserver
 
 ### Check what the app will actually use
 
+Run this **from the project root** — no Django bootstrap needed:
+
 ```bash
-python -c "
-import os, django
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings'); django.setup()
-from screening.common.llm import get_client, get_model
-c = get_client()
-print('key    :', c.api_key[:8] + '...')
-print('endpoint:', c.base_url)
-print('model  :', get_model())
-"
+python -c "from screening.common.llm import get_client, get_model; c = get_client(); print('key     :', c.api_key[:8] + '...'); print('endpoint:', c.base_url); print('model   :', get_model())"
 ```
 
 If the key prints, `.env` is being read. If `endpoint` isn't what you expect, your
-`OPENAI_BASE_URL` / `BASE_URL` isn't reaching the app.
+`OPENAI_BASE_URL` / `BASE_URL` isn't reaching the app. If you get
+`ModuleNotFoundError: No module named 'screening'`, you are not in the project root —
+`.env` is found relative to the code, but `screening` is imported relative to where you
+started Python.
 
 Only Stages 1 and 3, CV structuring and JD extraction use this key — Stage 2 runs the
 embedding model locally and needs no key at all. `.env` is gitignored; keep it that way.
