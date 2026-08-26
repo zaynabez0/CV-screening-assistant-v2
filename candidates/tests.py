@@ -242,6 +242,48 @@ def test_confirming_advances_the_run_to_stage1(client, run):
     assert run.current_stage == "stage1_pending"
 
 
+def test_the_confirmed_review_page_links_on_to_stage_1(client, run):
+    """A confirmed checkpoint is a finished step, not a dead end.
+
+    Once the run has moved on, this page can no longer do anything — so it has to say
+    where to go instead of leaving a disabled button and a red banner behind.
+    """
+    client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
+    with patch("candidates.views.structure_candidate", return_value=fake_extraction()):
+        client.post(reverse("candidates:structure", args=[run.pk]))
+    client.post(reverse("candidates:confirm", args=[run.pk]))
+
+    html = client.get(reverse("candidates:review", args=[run.pk])).content.decode()
+
+    assert reverse("runs:stage1_review", args=[run.pk]) in html
+    assert "Confirm preprocessing and continue" not in html   # the dead button is gone
+    assert "not CV preprocessing" not in html                 # and so is the wrong-stage banner
+
+
+def test_the_unconfirmed_review_page_still_offers_the_button_and_no_link(client, run):
+    """The forward link must not appear before the checkpoint is actually confirmed."""
+    client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
+    with patch("candidates.views.structure_candidate", return_value=fake_extraction()):
+        client.post(reverse("candidates:structure", args=[run.pk]))
+
+    html = client.get(reverse("candidates:review", args=[run.pk])).content.decode()
+
+    assert "Confirm preprocessing and continue" in html
+    assert reverse("runs:stage1_review", args=[run.pk]) not in html
+
+
+def test_a_run_stuck_before_this_stage_still_gets_the_blocked_banner(client, run):
+    """Suppressing the banner is only for a run that has moved *past* this checkpoint.
+    One that has not reached it yet is genuinely blocked and must still be told so."""
+    run.current_stage = "jd_pending"
+    run.save(update_fields=["current_stage"])
+
+    html = client.get(reverse("candidates:review", args=[run.pk])).content.decode()
+
+    assert "not CV preprocessing" in html
+    assert reverse("runs:stage1_review", args=[run.pk]) not in html
+
+
 def test_structuring_alone_does_not_advance_the_run(client, run):
     """No stage auto-runs the next. Only the human confirmation moves current_stage."""
     client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})

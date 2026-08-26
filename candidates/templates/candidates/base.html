@@ -62,7 +62,9 @@
     <p class="msg {{ m.tags }}">{{ m }}</p>
   {% endfor %}{% endif %}
 
-  {% if blocked %}<p class="blocked">{{ blocked }}</p>{% endif %}
+  {# A run that has moved past this checkpoint is done, not blocked: the page says so
+     itself, with a link onward. Only a genuine obstacle gets the red banner. #}
+  {% if blocked and not step_done %}<p class="blocked">{{ blocked }}</p>{% endif %}
 
   {% block content %}{% endblock %}
 </body>

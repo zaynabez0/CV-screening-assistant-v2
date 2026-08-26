@@ -51,6 +51,11 @@
         {% csrf_token %}
         <button type="submit">Confirm Stage 1 and continue</button>
       </form>
+    {% elif step_done %}
+      <h2>Confirmed</h2>
+      <p class="msg success">Stage 1 is confirmed — {{ passed|length }} candidate(s) carried
+         into Stage 2. These verdicts are read-only from here.</p>
+      <p><a href="{% url 'runs:stage2_review' run.pk %}">Continue to Stage 2 &rarr;</a></p>
     {% endif %}
   {% elif run.job_status != "running" %}
     <p class="muted">Stage 1 has not run yet for this run.</p>
