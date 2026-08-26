@@ -12,6 +12,7 @@ import pytest
 from screening.common import llm
 from screening.common.llm import (
     API_KEY_ENV_VARS,
+    BASE_URL_ENV_VARS,
     DEFAULT_MODEL,
     call_structured,
     get_base_url,
@@ -26,7 +27,7 @@ SCHEMA = {"type": "object", "properties": {}, "required": []}
 @pytest.fixture(autouse=True)
 def clean_client(monkeypatch):
     """No cached client leaks between tests, and no real key leaks in from the shell."""
-    for name in API_KEY_ENV_VARS + ("OPENAI_BASE_URL", "OPENAI_MODEL"):
+    for name in API_KEY_ENV_VARS + BASE_URL_ENV_VARS + ("OPENAI_MODEL",):
         monkeypatch.delenv(name, raising=False)
     reset_client()
     yield
@@ -70,9 +71,8 @@ def test_no_key_at_all_names_every_accepted_variable(monkeypatch):
         get_client()
 
     message = str(exc.value)
-    for name in API_KEY_ENV_VARS:
-        assert name in message
-    assert "OPENAI_BASE_URL" in message          # points at the gateway setting too
+    for name in API_KEY_ENV_VARS + BASE_URL_ENV_VARS:
+        assert name in message                   # points at the gateway settings too
 
 
 # --- Base URL --------------------------------------------------------------------
@@ -112,6 +112,41 @@ def test_a_whitespace_only_base_url_falls_back_too(monkeypatch):
 def test_surrounding_whitespace_is_stripped_from_the_gateway_url(monkeypatch):
     """Copy-pasting a URL into a .env often brings a trailing space with it."""
     monkeypatch.setenv("OPENAI_BASE_URL", "  https://gateway.example.com/v1  ")
+
+    assert get_base_url() == "https://gateway.example.com/v1"
+
+
+def test_the_bare_base_url_variable_is_used_when_the_standard_one_is_absent(monkeypatch):
+    """The deployment case: a gateway sub-key and its endpoint under the bare name."""
+    monkeypatch.setenv("KEY_REGULATOR_API_KEY", "sk-gateway")
+    monkeypatch.setenv("BASE_URL", "https://gateway.example.com/v1")
+
+    assert "gateway.example.com" in str(get_client().base_url)
+
+
+def test_the_standard_base_url_variable_wins_when_both_are_set(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://standard.example.com/v1")
+    monkeypatch.setenv("BASE_URL", "https://bare.example.com/v1")
+
+    assert get_base_url() == "https://standard.example.com/v1"
+
+
+def test_a_blank_standard_base_url_does_not_shadow_the_bare_one(monkeypatch):
+    """`OPENAI_BASE_URL=` left over from the template must fall through, not win."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "  ")
+    monkeypatch.setenv("BASE_URL", "https://gateway.example.com/v1")
+
+    assert get_base_url() == "https://gateway.example.com/v1"
+
+
+def test_a_blank_bare_base_url_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("BASE_URL", "")
+
+    assert get_base_url() == "https://api.openai.com/v1"
+
+
+def test_surrounding_whitespace_is_stripped_from_the_bare_url_too(monkeypatch):
+    monkeypatch.setenv("BASE_URL", "  https://gateway.example.com/v1  ")
 
     assert get_base_url() == "https://gateway.example.com/v1"
 
