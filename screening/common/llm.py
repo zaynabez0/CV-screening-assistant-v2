@@ -6,7 +6,7 @@ instead of four slightly different implementations.
 Configuration comes from the environment only — never Django settings, because this
 package must stay importable with zero Django imports:
 
-    OPENAI_API_KEY          the key. Standard name, wins if several are set.
+   
     KEY_REGULATOR_API_KEY   alternative name, for a gateway-issued sub-key.
     OPENAI_BASE_URL         a gateway endpoint instead of api.openai.com. Optional.
     OPENAI_MODEL            override the model id. Optional — a gateway may expose the
