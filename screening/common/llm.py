@@ -6,11 +6,11 @@ instead of four slightly different implementations.
 Configuration comes from the environment only — never Django settings, because this
 package must stay importable with zero Django imports:
 
-            
-    KEY_REGULATOR_API_KEY   
-    BASE_URL                
-    OPENAI_MODEL            
-                            
+    OPENAI_API_KEY          the key. Standard name, wins if several are set.
+    KEY_REGULATOR_API_KEY   alternative name, for a gateway-issued sub-key.
+    OPENAI_BASE_URL         a gateway endpoint instead of api.openai.com. Optional.
+    OPENAI_MODEL            override the model id. Optional — a gateway may expose the
+                            same model under a different name.
 
 Prompt caching: OpenAI's Responses API caches long repeated prompt prefixes
 automatically. Callers get that for free by putting the shared/reused part of the
@@ -26,7 +26,7 @@ from openai import OpenAI
 DEFAULT_MODEL = "gpt-5.6-luna"
 
 # Mirrors the SDK's own default endpoint, and we always pass it explicitly. Reason:
-# if OPENAI_BASE_URL is set but *blank* — `OPENAI_BASE_URL=` in a .env, easy to do when
+# if the base URL is set but *blank* — `OPENAI_BASE_URL=` in a .env, easy to do when
 # uncommenting the line — the SDK resolves base_url to the empty string and never falls
 # back to its default, whether you omit the argument or pass None. Every request then
 # goes nowhere with a confusing error. Passing a concrete URL is the only way out.
@@ -38,12 +38,25 @@ DEFAULT_BASE_URL = "https://api.openai.com/v1"
 # exists for deployments whose key is issued by a gateway under its own variable name.
 API_KEY_ENV_VARS = ("OPENAI_API_KEY", "KEY_REGULATOR_API_KEY")
 
+# Same order rule for the endpoint: the SDK's own name first, then the bare name that
+# gateway instructions often pair with a sub-key (KEY_REGULATOR_API_KEY + BASE_URL).
+# Both are optional — with neither set we talk to api.openai.com directly.
+BASE_URL_ENV_VARS = ("OPENAI_BASE_URL", "BASE_URL")
+
 _client = None
 
 
 def get_base_url() -> str:
-    """The endpoint to call: a gateway if OPENAI_BASE_URL is set, otherwise OpenAI's."""
-    return (os.environ.get("OPENAI_BASE_URL") or "").strip() or DEFAULT_BASE_URL
+    """The endpoint to call: a gateway if one is configured, otherwise OpenAI's.
+
+    A blank or whitespace-only value counts as unset and falls through to the next
+    name, so a leftover `OPENAI_BASE_URL=` in a .env can't shadow a filled-in BASE_URL.
+    """
+    for name in BASE_URL_ENV_VARS:
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            return value
+    return DEFAULT_BASE_URL
 
 
 def get_model() -> str:
@@ -69,7 +82,9 @@ def _resolve_api_key() -> str:
     raise RuntimeError(
         "No LLM API key found in the environment. Set one of: "
         + ", ".join(API_KEY_ENV_VARS)
-        + ". If you use a gateway rather than api.openai.com, also set OPENAI_BASE_URL."
+        + ". If you use a gateway rather than api.openai.com, also set one of: "
+        + ", ".join(BASE_URL_ENV_VARS)
+        + "."
     )
 
 

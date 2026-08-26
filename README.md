@@ -91,8 +91,8 @@ If you were issued a **sub-key** routed through a gateway or proxy rather than t
 # The key, under either name — OPENAI_API_KEY wins if you set both
 KEY_REGULATOR_API_KEY=your-sub-key
 
-# Your gateway's endpoint
-OPENAI_BASE_URL=https://your-gateway.example.com/v1
+# Your gateway's endpoint, under either name — OPENAI_BASE_URL wins if you set both
+BASE_URL=https://your-gateway.example.com/v1
 
 # Only if your gateway exposes the model under a different id
 OPENAI_MODEL=internal-luna-v2
@@ -103,10 +103,12 @@ OPENAI_MODEL=internal-luna-v2
 | `OPENAI_API_KEY` | The normal case. |
 | `KEY_REGULATOR_API_KEY` | Alternative name for the key, for a gateway-issued sub-key. Used only when `OPENAI_API_KEY` is unset. |
 | `OPENAI_BASE_URL` | Only when *not* calling `api.openai.com` directly. Leave it out otherwise. |
+| `BASE_URL` | Alternative name for the same endpoint. Used only when `OPENAI_BASE_URL` is unset. |
 | `OPENAI_MODEL` | Only when your gateway renames the model. Defaults to `gpt-5.6-luna`. |
 
-> ⚠️ **Don't leave `OPENAI_BASE_URL=` blank.** An empty value is treated as "not set" by
-> this project, but if you remove that handling the OpenAI SDK would resolve it to an
+> ⚠️ **Don't leave a base URL blank.** An empty value is treated as "not set" by this
+> project — so a leftover `OPENAI_BASE_URL=` falls through to `BASE_URL` instead of
+> shadowing it — but if you removed that handling the OpenAI SDK would resolve it to an
 > empty address and every request would fail with a confusing error. Either give it a
 > real URL or comment the line out.
 
@@ -132,7 +134,7 @@ print('model  :', get_model())
 ```
 
 If the key prints, `.env` is being read. If `endpoint` isn't what you expect, your
-`OPENAI_BASE_URL` isn't reaching the app.
+`OPENAI_BASE_URL` / `BASE_URL` isn't reaching the app.
 
 Only Stages 1 and 3, CV structuring and JD extraction use this key — Stage 2 runs the
 embedding model locally and needs no key at all. `.env` is gitignored; keep it that way.
@@ -365,7 +367,7 @@ web server, and it is enforced by a check in the test suite.
 | `ImportError: failed to find libmagic.  Check your installation` | The system library is missing — see [Prerequisites](#1-prerequisites). |
 | `No LLM API key found in the environment. Set one of: ...` | Neither key variable is set. Check `.env` exists in the project root and holds `OPENAI_API_KEY` or `KEY_REGULATOR_API_KEY`. |
 | `404` or "model not found" from a gateway | Usually the **model id**, not the key. Gateways often rename models — set `OPENAI_MODEL` to whatever yours exposes. |
-| Connection errors only on Stages 1/3, JD or CV structuring | Those are the LLM calls. Check `OPENAI_BASE_URL` points at your gateway; run the check snippet in [§3](#3-set-your-api-key). |
+| Connection errors only on Stages 1/3, JD or CV structuring | Those are the LLM calls. Check `OPENAI_BASE_URL` or `BASE_URL` points at your gateway; run the check snippet in [§3](#3-set-your-api-key). |
 | Upload page says the run is at the wrong stage | Confirm the job description first — that is what moves the run to `cv_pending`. |
 | "The job description's requirements have not been confirmed yet" | Press **Confirm requirements and continue** on the JD review page. |
 | Stage 2 hangs on first run | It's downloading the 2 GB model. Watch `~/.cache/huggingface`. |
