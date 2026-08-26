@@ -8,7 +8,7 @@ __pycache__/
 *.egg-info/
 v1/
 venv/
-
+API_test*.py
 # Django
 *.sqlite3
 media/
