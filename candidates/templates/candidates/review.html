@@ -11,7 +11,7 @@
        — flagged below. Read these before confirming.</p>
   {% endif %}
 
-  {% if awaiting_structuring %}
+  {% if awaiting_structuring and not step_done %}
     <form method="post" action="{% url 'candidates:structure' run.pk %}">
       {% csrf_token %}
       <button type="submit" {% if blocked %}disabled{% endif %}>
@@ -53,7 +53,12 @@
     <p class="muted">No CVs uploaded yet. <a href="{% url 'candidates:upload' run.pk %}">Upload some</a>.</p>
   {% endfor %}
 
-  {% if ready_count %}
+  {% if step_done %}
+    <h2>Confirmed</h2>
+    <p class="msg success">CV preprocessing is confirmed — {{ ready_count }} candidate(s)
+       carried forward. This page is read-only from here.</p>
+    <p><a href="{% url 'runs:stage1_review' run.pk %}">Continue to Stage 1 &rarr;</a></p>
+  {% elif ready_count %}
     <h2>Confirm</h2>
     <p>Confirming locks in {{ ready_count }} structured candidate(s) and makes Stage 1 available.
        Nothing runs automatically.</p>

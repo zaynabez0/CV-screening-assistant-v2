@@ -105,6 +105,7 @@ def stage1_review(request, run_id):
 
     return render(request, "runs/stage1_review.html", {
         "run": run,
+        "step_done": run.has_passed("stage1_pending"),
         "results": results,
         "passed": [r for r in results if r.passed],
         "failed": [r for r in results if not r.passed],
@@ -191,6 +192,7 @@ def stage2_review(request, run_id):
 
     return render(request, "runs/stage2_review.html", {
         "run": run,
+        "step_done": run.has_passed("stage2_pending"),
         "rows": rows,
         "keywords_text": "\n".join(run.stage2_keywords),
         "keyword_count": len(run.stage2_keywords),
@@ -339,6 +341,7 @@ def stage3_review(request, run_id):
 
     return render(request, "runs/stage3_review.html", {
         "run": run,
+        "step_done": run.has_passed("stage3_pending"),
         "rubric": weighted,
         "rubric_empty": not rubric,
         "normalized": normalized,

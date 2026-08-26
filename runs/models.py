@@ -25,6 +25,10 @@ class ScreeningRun(models.Model):
         ("done", "Closed"),
     ]
 
+    # The stage keys in pipeline order. Lets a checkpoint ask "has the run moved past me?"
+    # without every caller hard-coding the sequence.
+    STAGE_ORDER = [key for key, _label in STAGE_CHOICES]
+
     JOB_STATUS_CHOICES = [
         ("idle", "No job running"),
         ("running", "Running"),
@@ -48,6 +52,15 @@ class ScreeningRun(models.Model):
 
     def __str__(self):
         return f"Run #{self.pk} ({self.get_current_stage_display()})"
+
+    def has_passed(self, stage: str) -> bool:
+        """True once the run has moved *beyond* `stage` — that checkpoint is behind it.
+
+        Strictly after, never at: a run sitting on `stage` still has work to do there.
+        Review pages use this to swap their action forms for a link onward, so a
+        confirmed checkpoint is a finished step rather than a dead end.
+        """
+        return self.STAGE_ORDER.index(self.current_stage) > self.STAGE_ORDER.index(stage)
 
     @property
     def job_percent(self) -> int:

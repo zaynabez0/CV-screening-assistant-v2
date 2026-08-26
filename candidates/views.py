@@ -164,6 +164,7 @@ def review_candidates(request, run_id):
             "run": run,
             "candidates": candidates,
             "blocked": _require_stage(run),
+            "step_done": run.has_passed(REQUIRED_STAGE),
             "awaiting_structuring": [c for c in candidates if c.status == "pending"],
             "low_confidence_count": sum(1 for c in ready if c.is_low_confidence),
             "ready_count": len(ready),

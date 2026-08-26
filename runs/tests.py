@@ -72,6 +72,19 @@ def verdict(met: bool):
     }]}
 
 
+# --- The stage-order helper the review pages navigate by ---------------------
+
+@pytest.mark.parametrize("current, stage, expected", [
+    ("stage1_pending", "cv_pending", True),        # behind us
+    ("stage1_pending", "stage1_pending", False),   # standing on it: still work to do
+    ("stage1_pending", "stage2_pending", False),   # ahead of us
+    ("review", "stage3_pending", True),
+    ("jd_pending", "cv_pending", False),
+])
+def test_has_passed_is_strictly_after_never_at(current, stage, expected):
+    assert ScreeningRun(current_stage=current).has_passed(stage) is expected
+
+
 # --- The two anchor cases, end to end through the service --------------------
 
 def test_a_passing_candidate_is_recorded_as_passed(run):
@@ -342,6 +355,20 @@ def test_confirming_advances_to_stage2(client, run):
 
     run.refresh_from_db()
     assert run.current_stage == "stage2_pending"
+
+
+def test_the_confirmed_stage1_page_links_on_to_stage_2(client, run):
+    """A confirmed checkpoint has to say where to go next — its own controls are spent."""
+    add_candidate(run, "cv.pdf")
+    with patch("screening.stage1_hard_filter.evaluation.call_structured", return_value=verdict(True)):
+        run_stage1(run)
+    client.post(reverse("runs:stage1_confirm", args=[run.pk]))
+
+    html = client.get(reverse("runs:stage1_review", args=[run.pk])).content.decode()
+
+    assert reverse("runs:stage2_review", args=[run.pk]) in html
+    assert "Confirm Stage 1 and continue" not in html
+    assert "not ready for Stage 1" not in html      # a finished stage is not an error state
 
 
 def test_running_stage1_alone_does_not_advance_the_run(client, run):
@@ -718,6 +745,18 @@ def test_confirming_stage2_advances_to_stage3(client, ranked_run, fixed_semantic
     assert ranked_run.current_stage == "stage3_pending"
 
 
+def test_the_confirmed_stage2_page_links_on_to_stage_3(client, ranked_run, fixed_semantics):
+    fixed_semantics([0.2, 0.9, 0.5])
+    run_stage2(ranked_run)
+    client.post(reverse("runs:stage2_confirm", args=[ranked_run.pk]))
+
+    html = client.get(reverse("runs:stage2_review", args=[ranked_run.pk])).content.decode()
+
+    assert reverse("runs:stage3_review", args=[ranked_run.pk]) in html
+    assert "Confirm Stage 2 and continue" not in html
+    assert "not ready for Stage 2" not in html
+
+
 def test_running_stage2_alone_does_not_advance_the_run(ranked_run, fixed_semantics):
     fixed_semantics([0.2, 0.9, 0.5])
 
@@ -906,6 +945,17 @@ def test_skipping_stage3_advances_to_final_review(client):
     run.refresh_from_db()
     assert run.current_stage == "review"
     assert StageResult.objects.filter(run=run, stage="stage3").count() == 0
+
+
+def test_the_skipped_stage3_page_links_on_to_final_review(client):
+    run = stage3_run(requirements=[MUST_HAVE])
+    rank_stage2(run, add_candidate(run, "cv.pdf"), rank=1)
+    client.post(reverse("runs:stage3_skip", args=[run.pk]))
+
+    html = client.get(reverse("runs:stage3_review", args=[run.pk])).content.decode()
+
+    assert "Stage 3 was skipped" in html
+    assert reverse("runs:final_review", args=[run.pk]) in html
 
 
 def test_the_stage2_ranking_survives_the_skip(client):
@@ -1098,6 +1148,19 @@ def test_confirming_stage3_advances_to_final_review(client, scored_run):
 
     scored_run.refresh_from_db()
     assert scored_run.current_stage == "review"
+
+
+def test_the_confirmed_stage3_page_links_on_to_final_review(client, scored_run):
+    with patch("screening.stage3_scoring.scoring.call_structured",
+               return_value={"criterion_scores": criterion_scores()}):
+        run_stage3(scored_run)
+    client.post(reverse("runs:stage3_confirm", args=[scored_run.pk]))
+
+    html = client.get(reverse("runs:stage3_review", args=[scored_run.pk])).content.decode()
+
+    assert reverse("runs:final_review", args=[scored_run.pk]) in html
+    assert "Confirm Stage 3 and continue" not in html
+    assert "not ready for Stage 3" not in html
 
 
 def test_running_stage3_alone_does_not_advance_the_run(scored_run):
