@@ -1,4 +1,4 @@
-# CV Screening Assistant — v1
+# CV Screening Assistant — v2
 
 An internal HR tool: provide a job description, upload CVs, and run them through a
 three-stage selection pipeline to get a ranked shortlist with per-criterion evidence.
