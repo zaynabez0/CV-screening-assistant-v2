@@ -87,7 +87,7 @@
         {% if row.stage2 %}
           <p><strong>Stage 2 — ranking:</strong> rank {{ row.stage2_rank }},
              combined {{ row.stage2.output_json.final_score|floatformat:3 }}
-             (semantic {{ row.stage2.output_json.semantic_score|floatformat:3 }},
+             (JD fit {{ row.stage2.output_json.semantic_score|floatformat:3 }},
               keyword {{ row.stage2.output_json.keyword_score|floatformat:3 }})
              {% if row.shortlisted %}<span class="badge high">above cutoff</span>
              {% else %}<span class="badge">below cutoff</span>{% endif %}</p>

@@ -3,7 +3,8 @@
 {% block heading %}Stage 2 — ranking review{% endblock %}
 
 {% block content %}
-  <p>Candidates ranked by a fixed 50/50 blend of semantic similarity and keyword matching.
+  <p>Candidates ranked by a fixed 50/50 blend of an overall job-fit judgement and a
+     per-keyword presence check, both from one LLM call per candidate.
      The <strong>full ranked list</strong> is shown, not just the slice above the cutoff —
      nobody is eliminated here, the cutoff only decides who goes to Stage 3.</p>
 
@@ -12,7 +13,7 @@
       <p><strong>Stage 2 is running…</strong>
          <span id="job-progress">{{ run.job_processed }} / {{ run.job_total }}</span></p>
       <p class="muted">{{ run.job_message|default:"Working…" }}
-         The embedding model is ~2&nbsp;GB and is downloaded once on first use.</p>
+         One LLM call per candidate, so a large field takes a few minutes.</p>
     </div>
   {% elif run.job_status == "failed" and run.job_stage == "stage2" %}
     <p class="msg error"><strong>Stage 2 failed:</strong> {{ run.job_message }}</p>
@@ -32,8 +33,10 @@
     <p>
       <label for="keywords"><strong>Keywords</strong> (one per line, {{ keyword_count }} in use)</label><br>
       <span class="muted">Seeded from the JD's must-have and nice-to-have requirements. Add or
-        remove freely — this is your main lever over the ranking. Matching is fuzzy
-        (&ge;90% similarity) and looks only at each candidate's extracted skills list.</span><br>
+        remove freely — this is your main lever over the ranking. The model checks each
+        keyword against the whole candidate record, not just the extracted skills list,
+        and accepts spelling variants of the same thing but not merely related ones.
+        Short, concrete terms work better than whole requirement sentences.</span><br>
       <textarea id="keywords" name="keywords" rows="8" cols="46"
                 {% if run.current_stage != "stage2_pending" %}disabled{% endif %}>{{ keywords_text }}</textarea>
     </p>
@@ -70,7 +73,7 @@
     <h2>Full ranked list ({{ rows|length }})</h2>
     <table>
       <thead>
-        <tr><th>#</th><th>Candidate</th><th>Semantic</th><th>Keyword</th><th>Combined</th><th>Shortlist</th></tr>
+        <tr><th>#</th><th>Candidate</th><th>JD fit</th><th>Keyword</th><th>Combined</th><th>Shortlist</th></tr>
       </thead>
       <tbody>
         {% for row in rows %}

@@ -48,10 +48,7 @@ score for anyone scored at Stage 3.
   # Windows: pip install python-magic-bin  (instead of python-magic)
   ```
 
-- **An OpenAI API key** — needed for CV structuring, Stage 1 and Stage 3.
-- **~2.5 GB of free disk** — Stage 2 uses a self-hosted embedding model, `BAAI/bge-m3`,
-  downloaded on first use. See [§5](#5-prepare-the-embedding-model) — fetch it before your
-  first run rather than during it.
+- **An OpenAI API key** — needed for CV structuring and all three screening stages.
 
 ## 2. Install
 
@@ -64,9 +61,6 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
 ```
-
-This pulls in PyTorch via `sentence-transformers`, so expect a few minutes and a large
-download.
 
 ## 3. Set your API key
 
@@ -135,8 +129,8 @@ If the key prints, `.env` is being read. If `endpoint` isn't what you expect, yo
 `.env` is found relative to the code, but `screening` is imported relative to where you
 started Python.
 
-Only Stages 1 and 3, CV structuring and JD extraction use this key — Stage 2 runs the
-embedding model locally and needs no key at all. `.env` is gitignored; keep it that way.
+Every LLM-calling part of the pipeline uses this key: JD extraction, CV structuring,
+and Stages 1, 2 and 3. `.env` is gitignored; keep it that way.
 
 ## 4. Create the database and an admin user
 
@@ -156,92 +150,70 @@ python manage.py runserver
 
 Then open <http://127.0.0.1:8000/admin/> and sign in.
 
-## 5. Prepare the embedding model
+## 5. How Stage 2 ranks
 
-Stage 2 ranks candidates by **meaning**, not just keywords — a CV that says
-"server-side programming for web services" scores close to a job description asking for
-"Python backend development", even with no words in common. That is done by a model
-called **`BAAI/bge-m3`**, which runs on your own machine: no API account, no per-use
-cost, no candidate data leaving your computer.
+Stage 2 makes **one LLM call per surviving candidate**, and that call does two jobs at
+once:
 
-It was chosen for multilingual coverage — French and English CVs land in one ranking
-rather than being ranked by language.
+- a **job-fit score** (0-100) — how well the candidate's experience meets the
+  requirements taken as a whole. It judges the work, not the wording: a CV that says
+  "server-side programming for web services" can meet a "Python backend development"
+  requirement with no words in common.
+- a **per-keyword check** — for each keyword in your list, present or absent, with the
+  evidence quoted. It reads the whole candidate record, not just the extracted skills
+  list, so a skill demonstrated in a job description counts.
 
-### Download it before your first run
+Both are rescaled to 0-1 and blended 50/50 into the score the ranking uses. Only the
+*judgements* come from the model; every number is computed in Python from them, so a
+stored ranking can always be checked against what the model actually said.
 
-The model is about **2 GB** and is fetched the first time Stage 2 runs. If you skip this
-step, your first Stage 2 will look like it has hung: the download happens inside a
-background process whose output is hidden, so the page just sits at `0 / N` for several
-minutes with no explanation.
-
-Fetch it once, up front, where you can watch the progress bar:
-
-```bash
-python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-m3')"
-```
-
-Let it finish. Every run after this loads from the local cache in a few seconds.
+The **keyword list is your lever**. Short, concrete terms ("Kubernetes", "PostgreSQL")
+work better than whole requirement sentences. Editing the list marks an existing ranking
+stale and needs a re-run; moving the *cutoff* does not.
 
 ### Check it works
 
-This prints the actual similarity scores Stage 2 uses — worth running once to see what
-the model is doing before you trust it on real CVs:
+Two real API calls, worth running once to see what the model does before you trust it on
+real CVs:
 
 ```bash
 python -c "
-from screening.stage2_ranking.embeddings import semantic_scores
-jd = 'Python backend development for web services'
-candidates = [
-    'Python backend development for web services',                # identical
-    'Server-side programming in Django and Flask',                # same job, different words
-    'Ingenieur logiciel backend developpant des services web',    # same job, in French
-    'Pastry chef preparing desserts and viennoiseries',           # unrelated
-]
-for text, score in zip(candidates, semantic_scores(jd, candidates)):
-    print(f'{score:.3f}  {text}')
+from screening.stage2_ranking.ranking import score_candidate_match
+jd = [{'requirement': 'Python backend development',
+       'description': 'Building server-side services in Python'}]
+keywords = ['Python', 'Kubernetes']
+candidates = {
+    'backend dev': {'skills': ['Python', 'Django'], 'total_years_experience': 5,
+                    'experience': [{'title': 'Backend Engineer', 'company': 'Kite',
+                                    'description': 'Built server-side APIs in Python.'}]},
+    'pastry chef': {'skills': ['Pastry'], 'total_years_experience': 5,
+                    'experience': [{'title': 'Pastry Chef', 'company': 'Cafe',
+                                    'description': 'Prepared desserts.'}]},
+}
+for label, cv in candidates.items():
+    s = score_candidate_match(jd, cv, keywords)
+    print(f\"{s['final_score']:.3f}  fit {s['semantic_score']:.2f}  keyword {s['keyword_score']:.2f}  {label}\")
 "
 ```
 
-Scores run from -1 to 1. Expect the identical line near 1.0, with the paraphrase and the
-French line clearly above the pastry chef. If the unrelated line scores as high as the
-others, something is wrong — don't trust the Stage 2 ranking until it's fixed.
+Scores run from 0 to 1. Expect the backend developer clearly above the pastry chef. If
+they score alike, something is wrong — don't trust the Stage 2 ranking until it's fixed.
 
-You can also run the five tests that exercise the real model:
+### What it costs, and what it does not promise
 
-```bash
-python -m pytest screening/tests/test_stage2_embeddings_live.py -v
-```
-
-They skip automatically when the model isn't available, which is why the main test run
-reports 5 skipped until you've downloaded it.
-
-### Where it lives, and working offline
-
-The model is cached in `~/.cache/huggingface/hub`. To keep it somewhere else — a
-different drive, a shared folder — set `HF_HOME` before running anything:
-
-```bash
-export HF_HOME=/path/to/your/cache
-```
-
-Once downloaded, Stage 2 needs no internet at all. To be certain nothing reaches out to
-the network, run with:
-
-```bash
-export HF_HUB_OFFLINE=1
-```
-
-With that set, a missing model fails immediately with a clear error instead of silently
-trying to download.
-
-### If the download fails
-
-| Symptom | What it means |
-|---|---|
-| Hangs, then a connection error | No internet, or a proxy/firewall blocking `huggingface.co`. There is no alternative source — fix the connection. |
-| `No space left on device` | Needs ~2.5 GB free. Check the drive holding `HF_HOME`. |
-| Stage 2 fails but Stages 1 and 3 work | Those use the OpenAI API; only Stage 2 uses this local model. The problem is the model, not your API key. |
-| The process is killed part-way | Usually not enough memory. Close other applications and retry — the download resumes where it stopped. |
+- **One API call per surviving candidate.** Stage 2 is no longer the cheap stage: a
+  100-CV batch that clears Stage 1 makes 100 Stage 2 calls, and a large field takes a
+  few minutes. Long keyword lists add output tokens on every candidate, so keep the list
+  to terms you actually care about.
+- **It is not deterministic.** Re-running Stage 2 on the same candidates can reorder
+  ones that score close together — the same tradeoff Stage 1 already makes. Exact ties
+  still break on upload order, the ranking is written once and re-sliced by the cutoff
+  without re-running, and the order you confirm is the order that ships. The stored
+  `fit_reasoning` and per-keyword evidence are what make a given ranking explainable
+  months later.
+- **Candidate data leaves your machine at this stage too.** Stage 2 used to run
+  entirely locally. It no longer does: the anonymized record goes to the API exactly as
+  it does at Stages 1 and 3.
 
 ## 6. Start a screening run
 
@@ -294,8 +266,9 @@ run; nothing advances on its own.
 
 Useful things to know as you go:
 
-- **Stage 2 is slow the first time** unless you pre-downloaded the model — see
-  [Prepare the embedding model](#5-prepare-the-embedding-model).
+- **Stage 2 costs one API call per surviving candidate** and takes a few minutes for a
+  large field — see [How Stage 2 ranks](#5-how-stage-2-ranks). It is no longer the cheap
+  stage, and re-running it can reorder candidates that score close together.
 - **Stages run in a background process** and the page polls for progress. If a stage
   fails, the error appears on the page rather than vanishing.
 - **Changing the Stage 2 cutoff does not require a re-run** — it re-slices the existing
@@ -323,19 +296,12 @@ Both files carry candidate names and emails. Treat the downloads as personal dat
 ## 9. Run the tests
 
 ```bash
-python -m pytest              # 317 passed, 5 skipped
+python -m pytest              # 376 passed
 python -m pytest -v           # see individual test names
 ```
 
-Five tests are skipped when `BAAI/bge-m3` can't be downloaded (no network, or a
-restricted environment). They exercise the real embedding model and run automatically
-once it is reachable:
-
-```bash
-python -m pytest screening/tests/test_stage2_embeddings_live.py -v
-```
-
-No test makes a network call to OpenAI — the LLM is mocked throughout.
+Nothing is skipped and nothing reaches the network — the LLM is mocked throughout,
+Stage 2 included.
 
 ## 10. Project layout
 
@@ -369,7 +335,7 @@ web server, and it is enforced by a check in the test suite.
 | Connection errors only on Stages 1/3, JD or CV structuring | Those are the LLM calls. Check `OPENAI_BASE_URL` or `BASE_URL` points at your gateway; run the check snippet in [§3](#3-set-your-api-key). |
 | Upload page says the run is at the wrong stage | Confirm the job description first — that is what moves the run to `cv_pending`. |
 | "The job description's requirements have not been confirmed yet" | Press **Confirm requirements and continue** on the JD review page. |
-| Stage 2 hangs on first run | It's downloading the 2 GB model. Watch `~/.cache/huggingface`. |
+| Stage 2 is slow | It makes one API call per surviving candidate. The progress counter advances once per call. |
 | A stage says "failed" with a network error | Expected if the API is unreachable. Fix the connection and press the button again — re-running replaces the previous results rather than duplicating them. |
 | `database is locked` | SQLite limitation: a background stage and the web UI wrote at the same time. Retry. Known and accepted for v1. |
 | A confirmed job description can't be edited | By design — the stages already judged against it would no longer match. Start a new run. |
@@ -391,3 +357,9 @@ This is a development build. Three things must be fixed first:
 Also worth knowing: anonymization strips `full_name`, `email` and `phone` from the top
 level of the candidate JSON, but a name quoted inside an evidence line still reaches the
 LLM. Consider that before relying on the pipeline being fully blind.
+
+And note the scope of what leaves the machine: candidate data now reaches the LLM
+provider at **four** points in the pipeline, not three. Stage 2 used to rank locally with
+a self-hosted embedding model and sent nothing anywhere; it now makes an API call per
+surviving candidate like every other stage. That widens the vendor's scope in a DPIA — it
+is not merely an implementation detail.

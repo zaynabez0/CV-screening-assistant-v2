@@ -1,7 +1,7 @@
 """Stage 2 as a management command, launched by the trigger view via subprocess.
 
-Stage 2 loads a ~2 GB embedding model, so running it inside the request/response cycle
-would block the browser for the whole load. Same thin-command pattern as Stage 1.
+Stage 2 makes one LLM call per survivor, so running it inside the request/response
+cycle would block the browser for the whole batch. Same thin-command pattern as Stage 1.
 """
 
 from django.core.management.base import BaseCommand, CommandError
