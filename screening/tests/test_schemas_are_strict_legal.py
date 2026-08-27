@@ -14,12 +14,14 @@ import pytest
 from screening.cv.schema import CV_SCHEMA
 from screening.jd.schema import JD_SCHEMA
 from screening.stage1_hard_filter.schema import HARD_FILTER_SCHEMA
+from screening.stage2_ranking.schema import MATCH_SCHEMA
 from screening.stage3_scoring.schema import SCORE_SCHEMA
 
 ALL_SCHEMAS = {
     "JD_SCHEMA": JD_SCHEMA,
     "CV_SCHEMA": CV_SCHEMA,
     "HARD_FILTER_SCHEMA": HARD_FILTER_SCHEMA,
+    "MATCH_SCHEMA": MATCH_SCHEMA,
     "SCORE_SCHEMA": SCORE_SCHEMA,
 }
 

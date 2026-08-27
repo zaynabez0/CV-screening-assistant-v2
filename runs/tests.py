@@ -446,12 +446,31 @@ def ranked_run():
     return run
 
 
+def scripted_match(fit_score, keywords, reasoning="Scripted for the test."):
+    """One Stage 2 model reply, shaped like MATCH_SCHEMA. Every keyword reported found."""
+    return {
+        "fit_score": round(fit_score * 100),
+        "fit_reasoning": reasoning,
+        "keyword_matches": [{"keyword": k, "matched": True, "evidence": "quoted"}
+                            for k in keywords],
+    }
+
+
 @pytest.fixture
 def fixed_semantics(monkeypatch):
-    """Pin semantic_scores so ranking is deterministic without loading BGE-M3."""
+    """Pin the model's job-fit judgement per candidate so ranking is deterministic.
+
+    Takes one 0-1 fit score per survivor, in upload order — `run_stage2` scores them in
+    that order, one call each. The keyword half is left at "every keyword found", so a
+    run with no keywords still scores 0.0 on that half and every score is simply halved.
+    """
     def install(scores):
-        monkeypatch.setattr("screening.stage2_ranking.ranking.semantic_scores",
-                            lambda jd_text, texts: list(scores))
+        remaining = list(scores)
+
+        def fake(jd_requirements, candidate, keywords):
+            return scripted_match(remaining.pop(0), keywords)
+
+        monkeypatch.setattr("screening.stage2_ranking.ranking.match_candidate", fake)
     return install
 
 
@@ -518,17 +537,77 @@ def test_stage2_only_ranks_stage1_survivors(fixed_semantics):
 
 
 def test_stage2_sends_anonymized_candidates_to_the_ranker(ranked_run, monkeypatch):
-    captured = {}
+    """The candidate now goes to the model as its whole structured dict rather than a
+    constructed summary, so `anonymize_candidate` is the only thing keeping names out."""
+    captured = []
 
-    def spy(jd_text, texts):
-        captured["texts"] = texts
-        return [0.5] * len(texts)
+    def spy(jd_requirements, candidate, keywords):
+        captured.append(candidate)
+        return scripted_match(0.5, keywords)
 
-    monkeypatch.setattr("screening.stage2_ranking.ranking.semantic_scores", spy)
+    monkeypatch.setattr("screening.stage2_ranking.ranking.match_candidate", spy)
     run_stage2(ranked_run)
 
-    joined = "\n".join(captured["texts"])
+    joined = "\n".join(str(c) for c in captured)
     assert "Amina Benali" not in joined and "example.com" not in joined
+
+
+def test_stage2_makes_exactly_one_model_call_per_survivor(ranked_run, monkeypatch):
+    calls = []
+
+    def spy(jd_requirements, candidate, keywords):
+        calls.append(candidate)
+        return scripted_match(0.5, keywords)
+
+    monkeypatch.setattr("screening.stage2_ranking.ranking.match_candidate", spy)
+    run_stage2(ranked_run)
+
+    assert len(calls) == 3
+
+
+def test_the_instructions_are_identical_across_survivors(ranked_run, monkeypatch):
+    """The JD and the keyword list must be read once and reused, or the cached prompt
+    prefix misses on every call and nothing else looks wrong."""
+    prefixes = set()
+
+    def spy(instructions, input_text, schema_name, schema):
+        prefixes.add(instructions)
+        return scripted_match(0.5, [])
+
+    monkeypatch.setattr("screening.stage2_ranking.matching.call_structured", spy)
+    run_stage2(ranked_run)
+
+    assert len(prefixes) == 1
+
+
+def test_progress_advances_during_scoring_not_after_it(ranked_run, monkeypatch):
+    """The time is spent in the model calls, so the counter has to move there. If
+    progress went back into the write loop the bar would sit at 0 for the whole run."""
+    seen = []
+
+    def spy(jd_requirements, candidate, keywords):
+        seen.append(ScreeningRun.objects.get(pk=ranked_run.pk).job_processed)
+        return scripted_match(0.5, keywords)
+
+    monkeypatch.setattr("screening.stage2_ranking.ranking.match_candidate", spy)
+    run_stage2(ranked_run)
+
+    assert seen == [0, 1, 2]
+
+
+def test_stage2_stores_the_model_reasoning_and_keyword_evidence(ranked_run, fixed_semantics):
+    """The audit trail: months later, this is what explains a candidate's position."""
+    fixed_semantics([0.8, 0.4, 0.6])
+    ranked_run.stage2_keywords = ["Python"]
+    ranked_run.save()
+
+    run_stage2(ranked_run)
+
+    top = StageResult.objects.get(run=ranked_run, stage="stage2", output_json__rank=1)
+    assert top.output_json["fit_reasoning"] == "Scripted for the test."
+    assert top.output_json["keyword_matches"] == [
+        {"keyword": "Python", "matched": True, "evidence": "quoted"}
+    ]
 
 
 def test_rerunning_stage2_replaces_the_previous_ranking(ranked_run, fixed_semantics):
@@ -570,15 +649,44 @@ def test_stage2_refuses_when_nobody_passed_stage1():
 
 
 def test_stage2_command_records_failure_rather_than_hanging(ranked_run, monkeypatch):
-    monkeypatch.setattr("screening.stage2_ranking.ranking.semantic_scores",
-                        lambda *a: (_ for _ in ()).throw(RuntimeError("model download failed")))
+    monkeypatch.setattr("screening.stage2_ranking.ranking.match_candidate",
+                        lambda *a: (_ for _ in ()).throw(RuntimeError("upstream 503")))
 
     with pytest.raises(RuntimeError):
         call_command("run_stage2", ranked_run.pk)
 
     ranked_run.refresh_from_db()
     assert ranked_run.job_status == "failed"
-    assert "model download failed" in ranked_run.job_message
+    assert "upstream 503" in ranked_run.job_message
+
+
+def test_a_failure_part_way_through_leaves_the_previous_ranking_intact(
+        ranked_run, fixed_semantics, monkeypatch):
+    """Scoring is now minutes of API calls. Wiping a good ranking before starting a
+    re-run that might not finish would leave the recruiter with nothing on screen."""
+    fixed_semantics([0.2, 0.9, 0.5])
+    run_stage2(ranked_run)
+    before = [(r.candidate.original_filename, r.output_json["rank"])
+              for r in StageResult.objects.filter(run=ranked_run, stage="stage2")]
+
+    calls = []
+
+    def fail_on_the_second(jd_requirements, candidate, keywords):
+        calls.append(candidate)
+        if len(calls) == 2:
+            raise RuntimeError("upstream 503")
+        return scripted_match(0.5, keywords)
+
+    monkeypatch.setattr("screening.stage2_ranking.ranking.match_candidate", fail_on_the_second)
+    ranked_run.current_stage = "stage2_pending"
+    ranked_run.save()
+
+    with pytest.raises(RuntimeError):
+        run_stage2(ranked_run)
+
+    after = [(r.candidate.original_filename, r.output_json["rank"])
+             for r in StageResult.objects.filter(run=ranked_run, stage="stage2")]
+    assert after == before
 
 
 # --- Keyword seeding --------------------------------------------------------------
@@ -708,13 +816,13 @@ def test_review_shows_the_full_ranked_list_not_just_the_shortlist(client, ranked
 
 
 def test_review_shows_both_score_components(client, ranked_run, fixed_semantics):
-    fixed_semantics([0.812, 0.4, 0.6])
+    fixed_semantics([0.81, 0.4, 0.6])
     run_stage2(ranked_run)
 
     html = client.get(reverse("runs:stage2_review", args=[ranked_run.pk])).content.decode()
 
-    assert "0.812" in html                                    # the semantic half is visible
-    assert "Semantic" in html and "Keyword" in html
+    assert "0.810" in html                                    # the job-fit half is visible
+    assert "JD fit" in html and "Keyword" in html
 
 
 def test_review_page_works_before_stage2_has_run(client, ranked_run):

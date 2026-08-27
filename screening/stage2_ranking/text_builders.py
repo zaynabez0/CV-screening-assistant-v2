@@ -1,19 +1,12 @@
-"""What actually gets embedded — a constructed summary, not raw CV text.
+"""How the job description is rendered into the Stage 2 prompt.
 
-Embedding the raw CV would mix headers, contact blocks and formatting noise into the
-vector. These builders reduce a candidate to the parts a JD is actually about, from
-the already-structured JSON.
+One requirement per line, name paired with its description, which is what the model
+needs to judge fit against. There is no matching candidate builder: the candidate goes
+into the call as its already-structured, already-anonymized dict, exactly as Stages 1
+and 3 send it. The old builder reduced a candidate to skills + years + roles because
+embedding raw text mixed formatting noise into the vector; an LLM has no such problem
+and reads education, certifications and languages too.
 """
-
-
-def build_candidate_text(candidate: dict) -> str:
-    parts = [
-        f"Skills: {', '.join(candidate.get('skills', []))}",
-        f"Total experience: {candidate.get('total_years_experience', 0)} years",
-    ]
-    for exp in candidate.get("experience", []):
-        parts.append(f"{exp.get('title','')} at {exp.get('company','')}: {exp.get('description','')}")
-    return "\n".join(parts)
 
 
 def build_jd_text(requirements: list[dict]) -> str:

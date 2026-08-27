@@ -110,8 +110,8 @@ def get_client() -> OpenAI:
 
     Deviation from CLAUDE.md, which shows a module-level `client = OpenAI()`: that
     raises at *import* when no key is set, which would break `manage.py check`, the
-    test suite, and a fresh checkout before anyone has a key. This is the same
-    load-once-and-reuse pattern CLAUDE.md already uses for the embedding model.
+    test suite, and a fresh checkout before anyone has a key. Built once on the first
+    call and reused for every call after that.
     """
     global _client
     if _client is None:

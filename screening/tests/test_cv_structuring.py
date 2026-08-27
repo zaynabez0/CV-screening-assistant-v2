@@ -116,8 +116,8 @@ def test_long_cv_is_not_truncated():
 
 def test_non_standard_degree_cv_keeps_accented_characters():
     """French credentials carry accents. If they are mangled before the LLM sees them,
-    'Diplome d'Ingenieur d'Etat' is a different string to the embedding model in
-    Stage 2 and to the LLM here — and nothing raises an error when it happens.
+    'Diplome d'Ingenieur d'Etat' is a different string to the LLM here and to the one
+    ranking in Stage 2 — and nothing raises an error when it happens.
     """
     cv_text = load("non_standard_degree.txt")
     assert "Diplôme d'Ingénieur d'État" in cv_text

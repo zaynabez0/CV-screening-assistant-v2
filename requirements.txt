@@ -14,13 +14,6 @@ python-docx
 # Real file-type check via magic bytes (needs system libmagic installed)
 python-magic
 
-# Stage 2 - semantic ranking
-sentence-transformers
-numpy
-
-# Stage 2 - keyword matching
-rapidfuzz
-
 # Excel export of the run summary
 openpyxl
 

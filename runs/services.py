@@ -4,10 +4,12 @@ This is the layer the management command runs. Keeping it separate from the comm
 means the tests exercise the real work without spawning a subprocess.
 """
 
+from django.db import transaction
+
 from candidates.models import Candidate
 from screening.cv.anonymization import anonymize_candidate
 from screening.stage1_hard_filter.evaluation import evaluate_hard_filters, select_must_have
-from screening.stage2_ranking.ranking import score_breakdown, shortlist_size
+from screening.stage2_ranking.ranking import score_candidate_match, shortlist_size
 from screening.stage3_scoring.aggregation import aggregate_score
 from screening.stage3_scoring.rubric import apply_user_weights, build_rubric, rubric_is_empty
 from screening.stage3_scoring.scoring import score_candidate
@@ -102,36 +104,46 @@ def stage2_preflight(run) -> list:
 
 
 def run_stage2(run) -> dict:
-    """Rank Stage 1's survivors by a 50/50 blend of semantic similarity and keywords.
+    """Rank Stage 1's survivors by a 50/50 blend of job fit and keyword matches.
 
-    Writes one StageResult per survivor with both halves of the score and its rank.
-    The cutoff is NOT applied here: it lives on the run and is applied when the
-    shortlist is read, so the recruiter can move it without paying for a re-run.
+    One LLM call per survivor, like Stages 1 and 3. Writes one StageResult per survivor
+    with both halves of the score and its rank. The cutoff is NOT applied here: it lives
+    on the run and is applied when the shortlist is read, so the recruiter can move it
+    without paying for a re-run.
     """
     survivors = stage2_preflight(run)
     keywords = list(run.stage2_keywords)
 
     run.mark_job_started("stage2", total=len(survivors))
-    run.job_message = "Loading the embedding model and scoring candidates…"
+    run.job_message = "Matching each candidate against the job description…"
     run.save(update_fields=["job_message"])
 
-    StageResult.objects.filter(run=run, stage="stage2").delete()
-
-    anonymized = [anonymize_candidate(c.extracted_json) for c in survivors]
-    breakdown = score_breakdown(run.job_description.requirements, anonymized, keywords)
+    # Score first, write second. Ranks need every score before any row can be written,
+    # and progress has to be reported here rather than in the write loop below: the
+    # time is spent in these calls, one per candidate, not in the inserts.
+    requirements = run.job_description.requirements
+    breakdown = []
+    for index, candidate in enumerate(survivors, start=1):
+        anon = anonymize_candidate(candidate.extracted_json)
+        breakdown.append(score_candidate_match(requirements, anon, keywords))
+        run.mark_job_progress(index)
 
     # Highest score first; ties keep upload order so the ranking is reproducible.
     order = sorted(range(len(survivors)), key=lambda i: (-breakdown[i]["final_score"], i))
 
-    for rank, index in enumerate(order, start=1):
-        StageResult.objects.create(
-            run=run,
-            candidate=survivors[index],
-            stage="stage2",
-            passed=None,  # ranking has no pass/fail — the cutoff decides, and it is adjustable
-            output_json={**breakdown[index], "rank": rank, "keywords_used": keywords},
-        )
-        run.mark_job_progress(rank)
+    # Deleted only once the replacement is in hand, and swapped atomically. Scoring is
+    # now minutes of API calls rather than one local batch, and a failure part-way
+    # through must not leave the run with neither the old ranking nor a new one.
+    with transaction.atomic():
+        StageResult.objects.filter(run=run, stage="stage2").delete()
+        for rank, index in enumerate(order, start=1):
+            StageResult.objects.create(
+                run=run,
+                candidate=survivors[index],
+                stage="stage2",
+                passed=None,  # ranking has no pass/fail — the cutoff decides, and it is adjustable
+                output_json={**breakdown[index], "rank": rank, "keywords_used": keywords},
+            )
 
     shortlisted = shortlist_size(len(survivors), run.stage2_cutoff_percent)
     run.mark_job_finished(

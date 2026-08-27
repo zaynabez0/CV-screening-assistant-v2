@@ -1,1 +1,1 @@
-"""Stage 2 - ranking by embedding similarity combined with keyword matching."""
+"""Stage 2 - ranking by an LLM's judgement of job fit combined with keyword matching."""
