@@ -1,0 +1,15 @@
+{% comment %}
+What this one step cost, shown next to the button that moves the run on.
+
+The token counts and the rates are printed alongside the figure on purpose: it makes the
+price checkable by hand rather than something the page merely asserts. Renders nothing
+until the step has actually run.
+{% endcomment %}
+{% if step_cost %}
+  <p class="muted">
+    This step cost <strong>{{ step_cost.cost_display }}</strong> —
+    {{ step_cost.calls }} LLM call{{ step_cost.calls|pluralize }}, {{ step_cost.seconds_display }}.<br>
+    {{ step_cost.input_display }} input tokens ({{ step_cost.cached_display }} cached)
+    and {{ step_cost.output_display }} output, at {{ step_cost.rates }}.
+  </p>
+{% endif %}

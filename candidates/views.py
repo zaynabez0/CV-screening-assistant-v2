@@ -5,13 +5,16 @@ advance the run. The recruiter presses each button, and the run only leaves CV
 preprocessing when they confirm the review checkpoint.
 """
 
+import subprocess
+import sys
+
+from django.conf import settings
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect, render
 
 from runs.models import ScreeningRun
-from runs.usage import record_calls
-from screening.common.text_extraction import extract_text_from_file
-from screening.cv.structuring import structure_candidate
+from runs.services import StageNotReady, structuring_preflight
+from runs.usage import step_cost
 from screening.cv.validation import (
     CVValidationError,
     DuplicateFileError,
@@ -106,45 +109,40 @@ def upload_cvs(request, run_id):
 
 
 def structure_cvs(request, run_id):
-    """POST-only. Sends every validated-but-unstructured CV to the LLM.
+    """POST-only. Launches the structuring job and returns straight away.
 
-    Runs inline. CLAUDE.md's subprocess + polling mechanism is a later phase; for a
-    batch this size the request simply takes as long as it takes.
+    One LLM call per CV, so a batch of fifty is minutes of work. It used to run inline and
+    the browser simply hung; now it is a background command and the review page shows a
+    progress bar, the same arrangement the three stages use.
     """
     run = get_object_or_404(ScreeningRun, pk=run_id)
     if request.method != "POST":
         return redirect("candidates:review", run_id=run.pk)
 
-    blocked = _require_stage(run)
-    if blocked:
-        messages.error(request, blocked)
+    if run.job_status == "running":
+        messages.info(request, "A job is already running for this run.")
         return redirect("candidates:review", run_id=run.pk)
 
-    pending = Candidate.objects.filter(run=run, status="pending", extracted_json__isnull=True)
-    if not pending.exists():
-        messages.info(request, "No validated CVs are waiting to be structured.")
+    # Checked here as well as in the command, so a user who cannot run it is told why now
+    # rather than after a subprocess silently fails.
+    try:
+        pending = structuring_preflight(run)
+    except StageNotReady as exc:
+        messages.error(request, str(exc))
         return redirect("candidates:review", run_id=run.pk)
 
-    structured, failed = 0, 0
-    for candidate in pending:
-        try:
-            text = extract_text_from_file(candidate.file.path)
-            with record_calls(run, "cv_structuring", candidate):
-                candidate.extracted_json = structure_candidate(text)
-        except Exception as exc:  # noqa: BLE001 — an API failure is not the candidate's fault
-            # Left at "pending" on purpose so the recruiter can retry without re-uploading.
-            candidate.rejection_reason = f"structuring failed: {type(exc).__name__}: {exc}"
-            failed += 1
-        else:
-            candidate.rejection_reason = ""
-            candidate.status = "ready"
-            structured += 1
-        candidate.save()
+    # Marked running before the subprocess starts: otherwise the redirect can land on a
+    # page that still reads "idle" and offers the button again.
+    run.mark_job_started("cv_structuring", total=len(pending))
 
-    if failed:
-        messages.warning(request, f"{structured} structured, {failed} failed — retry to try the failures again.")
-    else:
-        messages.success(request, f"{structured} CV(s) structured. Review them before continuing.")
+    subprocess.Popen(
+        [sys.executable, "manage.py", "run_cv_structuring", str(run.pk)],
+        cwd=str(settings.BASE_DIR),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    messages.success(request, f"Structuring started for {len(pending)} CV(s).")
     return redirect("candidates:review", run_id=run.pk)
 
 
@@ -170,6 +168,7 @@ def review_candidates(request, run_id):
             "awaiting_structuring": [c for c in candidates if c.status == "pending"],
             "low_confidence_count": sum(1 for c in ready if c.is_low_confidence),
             "ready_count": len(ready),
+            "step_cost": step_cost(run, "cv_structuring"),
         },
     )
 
@@ -189,12 +188,17 @@ def confirm_preprocessing(request, run_id):
         messages.error(request, blocked)
         return redirect("candidates:review", run_id=run.pk)
 
+    if run.job_status == "running":
+        messages.error(request, "Structuring is still running — wait for it to finish.")
+        return redirect("candidates:review", run_id=run.pk)
+
     ready = Candidate.objects.filter(run=run, status="ready")
     if not ready.exists():
         messages.error(request, "Structure at least one CV before confirming.")
         return redirect("candidates:review", run_id=run.pk)
 
     run.current_stage = "stage1_pending"
-    run.save(update_fields=["current_stage"])
+    run.job_status = "idle"          # clears the finished-job banner, as confirm_stage1 does
+    run.save(update_fields=["current_stage", "job_status"])
     messages.success(request, f"CV preprocessing confirmed with {ready.count()} candidate(s). Stage 1 is now available.")
     return redirect("candidates:review", run_id=run.pk)

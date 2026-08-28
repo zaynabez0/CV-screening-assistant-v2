@@ -1,0 +1,53 @@
+{% comment %}
+The running/failed/finished banner for a background step, with a progress bar.
+
+Included by all four processing pages. Previously the markup and the poll script were
+byte-identical copies in the three stage templates; the bar lives here so there is one
+copy to change.
+
+Expects `run` plus three values passed with the include:
+  job_step   the run.job_stage value this page owns, so a *different* step's failure
+             banner never renders here
+  job_label  what to call the step in the banner
+  job_note   one line of explanation while it runs
+{% endcomment %}
+{% if run.job_status == "running" %}
+  <div class="card" id="job-panel">
+    <p><strong>{{ job_label }} is running…</strong>
+       <span id="job-progress" class="num">{{ run.job_processed }} / {{ run.job_total }}</span>
+       <span class="muted" id="job-percent">{{ run.job_percent }}%</span></p>
+
+    <div class="bar" role="progressbar" aria-label="{{ job_label }} progress"
+         aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ run.job_percent }}">
+      <div class="bar-fill" id="job-bar" style="width: {{ run.job_percent }}%"></div>
+    </div>
+
+    <p class="muted">{{ job_note }} This page refreshes itself when the job finishes.</p>
+  </div>
+
+  <script>
+    // Poll the job_* fields on ScreeningRun until the subprocess reports back. The
+    // endpoint is stage-agnostic — one URL serves every step.
+    const statusUrl = "{% url 'runs:job_status' run.pk %}";
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch(statusUrl, {headers: {"X-Requested-With": "fetch"}});
+        const data = await r.json();
+        const count = document.getElementById("job-progress");
+        const percent = document.getElementById("job-percent");
+        const bar = document.getElementById("job-bar");
+        if (count) count.textContent = data.processed + " / " + data.total;
+        if (percent) percent.textContent = data.percent + "%";
+        if (bar) {
+          bar.style.width = data.percent + "%";
+          bar.parentElement.setAttribute("aria-valuenow", data.percent);
+        }
+        if (data.status !== "running") { clearInterval(poll); location.reload(); }
+      } catch (e) { /* transient failure — the next tick retries */ }
+    }, 2000);
+  </script>
+{% elif run.job_status == "failed" and run.job_stage == job_step %}
+  <p class="msg error"><strong>{{ job_label }} failed:</strong> {{ run.job_message }}</p>
+{% elif run.job_status == "done" and run.job_stage == job_step and run.job_message %}
+  <p class="msg success">{{ run.job_message }}</p>
+{% endif %}

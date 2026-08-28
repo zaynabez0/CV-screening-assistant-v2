@@ -6,12 +6,14 @@
   <p>Check each extraction before it reaches Stage 1. A garbled extraction caught here is a
      wrong Stage&nbsp;1 decision avoided.</p>
 
+  {% include "runs/_job_panel.html" with job_step="cv_structuring" job_label="Structuring" job_note="One LLM call per CV, so a large batch takes a few minutes." %}
+
   {% if low_confidence_count %}
     <p class="msg warning"><strong>{{ low_confidence_count }} low-confidence extraction(s)</strong>
        — flagged below. Read these before confirming.</p>
   {% endif %}
 
-  {% if awaiting_structuring and not step_done %}
+  {% if awaiting_structuring and not step_done and run.job_status != "running" %}
     <form method="post" action="{% url 'candidates:structure' run.pk %}">
       {% csrf_token %}
       <button type="submit" {% if blocked %}disabled{% endif %}>
@@ -58,8 +60,9 @@
     <p class="msg success">CV preprocessing is confirmed — {{ ready_count }} candidate(s)
        carried forward. This page is read-only from here.</p>
     <p><a href="{% url 'runs:stage1_review' run.pk %}">Continue to Stage 1 &rarr;</a></p>
-  {% elif ready_count %}
+  {% elif ready_count and run.job_status != "running" %}
     <h2>Confirm</h2>
+    {% include "runs/_step_cost.html" %}
     <p>Confirming locks in {{ ready_count }} structured candidate(s) and makes Stage 1 available.
        Nothing runs automatically.</p>
     <form method="post" action="{% url 'candidates:confirm' run.pk %}">

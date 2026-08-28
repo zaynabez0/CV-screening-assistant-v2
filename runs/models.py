@@ -1,5 +1,3 @@
-from decimal import Decimal
-
 from django.db import models
 
 
@@ -47,10 +45,20 @@ class ScreeningRun(models.Model):
 
     # --- async job status, polled by the frontend ---
     job_status = models.CharField(max_length=10, choices=JOB_STATUS_CHOICES, default="idle")
-    job_stage = models.CharField(max_length=10, blank=True)   # which stage the job is for
+    # 20, not 10: "cv_structuring" is 14 characters and preprocessing is a background
+    # job like the stages now.
+    job_stage = models.CharField(max_length=20, blank=True)   # which step the job is for
     job_message = models.TextField(blank=True)                # human-readable; the error text on failure
     job_processed = models.PositiveIntegerField(default=0)
     job_total = models.PositiveIntegerField(default=0)
+
+    # What each LLM-calling step of this run spent: one entry per step, keyed by the step
+    # names in runs/usage.py, each holding call count, token counts and elapsed seconds.
+    # Tokens rather than money — the price is computed on read from the rates in
+    # screening/common/pricing.py, so correcting a rate re-prices runs already finished.
+    # A JSON field rather than a table: the readout is a per-step total, so per-call rows
+    # would be storage nobody reads.
+    step_costs = models.JSONField(default=dict)
 
     def __str__(self):
         return f"Run #{self.pk} ({self.get_current_stage_display()})"
@@ -156,90 +164,3 @@ class Override(models.Model):
 
     def __str__(self):
         return f"{self.get_action_display()} — {self.candidate.original_filename}"
-
-
-class ModelPrice(models.Model):
-    """What one model costs, in EUR per million tokens. Edited in the Django admin.
-
-    Deliberately data rather than code: the rate a gateway-issued sub-key is billed at is
-    the operator's to know, and hardcoding a guess for a model this app does not own would
-    produce confident, wrong numbers. With no row for a model, cost reads as "not priced"
-    rather than as zero.
-
-    Three rates because the Responses API bills three ways, and the middle one is the
-    whole point of this project's cached-prefix prompt design: a cached input token is
-    typically a fraction of a fresh one.
-    """
-
-    model_name = models.CharField(max_length=100, unique=True)  # e.g. "gpt-5.6-luna"
-    input_per_million = models.DecimalField(max_digits=12, decimal_places=4)
-    cached_input_per_million = models.DecimalField(max_digits=12, decimal_places=4)
-    output_per_million = models.DecimalField(max_digits=12, decimal_places=4)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        ordering = ["model_name"]
-
-    def __str__(self):
-        return f"{self.model_name} (in {self.input_per_million}, out {self.output_per_million} €/Mtok)"
-
-    def cost_for(self, input_tokens: int, cached_input_tokens: int, output_tokens: int) -> Decimal:
-        """EUR for one call, or for a summed group of them — the formula is linear, so
-        totalling tokens first and pricing once gives the same answer as pricing each call.
-
-        `input_tokens` is the total INCLUDING the cached ones, so the cached share is
-        subtracted before the full rate is applied. Adding the two instead would overcharge
-        every repeated prefix, which is exactly what this app maximises.
-        """
-        fresh_input = max(0, input_tokens - cached_input_tokens)
-        total = (
-            fresh_input * self.input_per_million
-            + cached_input_tokens * self.cached_input_per_million
-            + output_tokens * self.output_per_million
-        )
-        return total / Decimal(1_000_000)
-
-
-class LlmCall(models.Model):
-    """One LLM request: what it cost in tokens, and how long it took.
-
-    One row per call rather than a running total on the run, because "inference time per
-    CV at each step" needs the individual calls to average, and because the stages run in
-    a separate process whose only channel back is the database.
-
-    `candidate` is null for JD extraction, which is one call for the whole run rather than
-    one per CV. Cost is NOT stored: it is computed from these token counts against the
-    current ModelPrice, so entering a rate after a run has finished prices that run
-    retroactively instead of freezing it at zero.
-    """
-
-    STEP_CHOICES = [
-        ("jd_extraction", "JD extraction"),
-        ("cv_structuring", "CV structuring"),
-        ("stage1", "Stage 1 — hard filter"),
-        ("stage2", "Stage 2 — ranking"),
-        ("stage3", "Stage 3 — scoring"),
-    ]
-    STEP_ORDER = [key for key, _label in STEP_CHOICES]
-
-    run = models.ForeignKey("runs.ScreeningRun", on_delete=models.CASCADE)
-    candidate = models.ForeignKey("candidates.Candidate", on_delete=models.CASCADE,
-                                  null=True, blank=True)  # null: JD extraction is per-run
-    step = models.CharField(max_length=20, choices=STEP_CHOICES)
-    model_name = models.CharField(max_length=100)
-    input_tokens = models.PositiveIntegerField(default=0)
-    cached_input_tokens = models.PositiveIntegerField(default=0)  # a subset of input_tokens
-    output_tokens = models.PositiveIntegerField(default=0)
-    reasoning_tokens = models.PositiveIntegerField(default=0)     # a subset of output_tokens
-    duration_ms = models.PositiveIntegerField(default=0)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ["created_at", "pk"]
-
-    def __str__(self):
-        return f"{self.get_step_display()} · {self.duration_ms} ms · {self.total_tokens} tokens"
-
-    @property
-    def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens

@@ -7,7 +7,9 @@ means the tests exercise the real work without spawning a subprocess.
 from django.db import transaction
 
 from candidates.models import Candidate
+from screening.common.text_extraction import extract_text_from_file
 from screening.cv.anonymization import anonymize_candidate
+from screening.cv.structuring import structure_candidate
 from screening.stage1_hard_filter.evaluation import evaluate_hard_filters, select_must_have
 from screening.stage2_ranking.ranking import score_candidate_match, shortlist_size
 from screening.stage3_scoring.aggregation import aggregate_score
@@ -15,11 +17,64 @@ from screening.stage3_scoring.rubric import apply_user_weights, build_rubric, ru
 from screening.stage3_scoring.scoring import score_candidate
 
 from .models import Override, StageResult
-from .usage import record_calls
+from .usage import record_step
 
 
 class StageNotReady(Exception):
     """The run is not in a state where this stage may run."""
+
+
+# --- CV preprocessing ---------------------------------------------------------
+
+def structuring_preflight(run) -> list:
+    """Everything that must be true before structuring may start. Returns the pending CVs."""
+    if run.current_stage != "cv_pending":
+        raise StageNotReady(
+            f"This run is at '{run.get_current_stage_display()}', not CV preprocessing."
+        )
+    pending = list(
+        Candidate.objects.filter(run=run, status="pending", extracted_json__isnull=True)
+        .order_by("pk")
+    )
+    if not pending:
+        raise StageNotReady("No validated CVs are waiting to be structured.")
+    return pending
+
+
+def run_cv_structuring(run) -> dict:
+    """Send every validated-but-unstructured CV to the LLM, one call each.
+
+    Unlike the stages this is fault-tolerant per candidate, and deliberately so: a CV the
+    model chokes on records why, stays `pending`, and is retried the next time the button
+    is pressed — without re-uploading. So a failure here must NOT propagate the way a
+    stage failure does, or one bad CV would abort a batch of fifty and mark the whole job
+    failed. The count of failures goes in the finish message instead.
+    """
+    pending = structuring_preflight(run)
+
+    run.mark_job_started("cv_structuring", total=len(pending))
+    run.job_message = "Extracting structured data from each CV…"
+    run.save(update_fields=["job_message"])
+
+    structured, failed = 0, 0
+    with record_step(run, "cv_structuring"):
+        for index, candidate in enumerate(pending, start=1):
+            try:
+                text = extract_text_from_file(candidate.file.path)
+                candidate.extracted_json = structure_candidate(text)
+            except Exception as exc:  # noqa: BLE001 — an API failure is not the candidate's fault
+                candidate.rejection_reason = f"structuring failed: {type(exc).__name__}: {exc}"
+                failed += 1
+            else:
+                candidate.rejection_reason = ""
+                candidate.status = "ready"
+                structured += 1
+            candidate.save()
+            run.mark_job_progress(index)
+
+    note = f", {failed} failed — press again to retry the failures" if failed else ""
+    run.mark_job_finished(f"{structured} CV(s) structured{note}.")
+    return {"structured": structured, "failed": failed}
 
 
 def stage1_preflight(run) -> list:
@@ -58,20 +113,20 @@ def run_stage1(run) -> dict:
     StageResult.objects.filter(run=run, stage="stage1").delete()
 
     passed_count = 0
-    for index, candidate in enumerate(candidates, start=1):
-        anon = anonymize_candidate(candidate.extracted_json)
-        with record_calls(run, "stage1", candidate):
+    with record_step(run, "stage1"):
+        for index, candidate in enumerate(candidates, start=1):
+            anon = anonymize_candidate(candidate.extracted_json)
             result = evaluate_hard_filters(anon, must_haves)
 
-        StageResult.objects.create(
-            run=run,
-            candidate=candidate,
-            stage="stage1",
-            passed=result["passed"],
-            output_json={"evaluations": result["evaluations"]},
-        )
-        passed_count += bool(result["passed"])
-        run.mark_job_progress(index)
+            StageResult.objects.create(
+                run=run,
+                candidate=candidate,
+                stage="stage1",
+                passed=result["passed"],
+                output_json={"evaluations": result["evaluations"]},
+            )
+            passed_count += bool(result["passed"])
+            run.mark_job_progress(index)
 
     summary = {
         "evaluated": len(candidates),
@@ -125,11 +180,11 @@ def run_stage2(run) -> dict:
     # time is spent in these calls, one per candidate, not in the inserts.
     requirements = run.job_description.requirements
     breakdown = []
-    for index, candidate in enumerate(survivors, start=1):
-        anon = anonymize_candidate(candidate.extracted_json)
-        with record_calls(run, "stage2", candidate):
+    with record_step(run, "stage2"):
+        for index, candidate in enumerate(survivors, start=1):
+            anon = anonymize_candidate(candidate.extracted_json)
             breakdown.append(score_candidate_match(requirements, anon, keywords))
-        run.mark_job_progress(index)
+            run.mark_job_progress(index)
 
     # Highest score first; ties keep upload order so the ranking is reproducible.
     order = sorted(range(len(survivors)), key=lambda i: (-breakdown[i]["final_score"], i))
@@ -210,24 +265,24 @@ def run_stage3(run) -> dict:
     StageResult.objects.filter(run=run, stage="stage3").delete()
 
     anomalies = 0
-    for index, candidate in enumerate(shortlist, start=1):
-        anon = anonymize_candidate(candidate.extracted_json)
-        with record_calls(run, "stage3", candidate):
+    with record_step(run, "stage3"):
+        for index, candidate in enumerate(shortlist, start=1):
+            anon = anonymize_candidate(candidate.extracted_json)
             criterion_scores = score_candidate(anon, weighted)
-        aggregated = aggregate_score(criterion_scores, weighted)
+            aggregated = aggregate_score(criterion_scores, weighted)
 
-        StageResult.objects.create(
-            run=run,
-            candidate=candidate,
-            stage="stage3",
-            passed=None,  # scoring is not a gate — the recruiter reads the ranking
-            output_json={
-                **aggregated,
-                "weights_used": {c["requirement"]: c["weight"] for c in weighted},
-            },
-        )
-        anomalies += bool(aggregated["unknown_criteria"] or aggregated["unscored_criteria"])
-        run.mark_job_progress(index)
+            StageResult.objects.create(
+                run=run,
+                candidate=candidate,
+                stage="stage3",
+                passed=None,  # scoring is not a gate — the recruiter reads the ranking
+                output_json={
+                    **aggregated,
+                    "weights_used": {c["requirement"]: c["weight"] for c in weighted},
+                },
+            )
+            anomalies += bool(aggregated["unknown_criteria"] or aggregated["unscored_criteria"])
+            run.mark_job_progress(index)
 
     note = f" {anomalies} had criteria the model mis-named or skipped." if anomalies else ""
     run.mark_job_finished(f"Stage 3 complete: {len(shortlist)} candidate(s) scored.{note}")

@@ -1,210 +1,109 @@
-"""LLM cost and latency: recording it, and rolling it up for display.
+"""What each LLM-calling step of a run spent: recording it, and reading it back.
 
 The screening package times every call and counts its tokens but cannot store any of it —
 it has no Django imports by design. This module is the other half: it opens a
-`collect_usage()` block around each call site and writes what falls out to `LlmCall`.
+`collect_usage()` block around a step and totals what falls out into
+`ScreeningRun.step_costs`.
 
-Cost is never stored, only computed. Rates live in `ModelPrice`, editable in the admin,
-and pricing a run from its stored token counts means entering a rate for the first time
-prices every run that already finished — which is the normal order of events, since you
-cannot know what a call cost until you have made one. The cost of that choice is that
-correcting a rate rewrites history; the token counts, which are the facts, never move.
+One entry per step, not one row per call. The number the recruiter is shown is a per-step
+total sitting next to the button that moves them on, so per-call rows would be storage
+nobody reads.
+
+Only tokens and seconds are stored. Price is computed on read from the rates in
+`screening/common/pricing.py`, which means correcting a rate corrects every run already
+finished — and, unlike the version this replaces, there is no model id to match and
+therefore nothing that can silently fail to price.
 """
 
 from contextlib import contextmanager
-from decimal import Decimal
-
-from django.db.models import Count, Sum
 
 from screening.common.llm import collect_usage
+from screening.common.pricing import RATE_SUMMARY, cost_usd, format_usd
 
-from .models import LlmCall, ModelPrice
-
-# Rendered in the panel and the exports. Pipeline order, not alphabetical: the point of
-# the table is to show where the time and money go as a run progresses.
-STEP_LABELS = dict(LlmCall.STEP_CHOICES)
+# Pipeline order. The keys are what `record_step` is called with and what `step_costs`
+# is keyed by; the labels are what the pages show.
+STEP_LABELS = {
+    "jd_extraction": "JD extraction",
+    "cv_structuring": "CV structuring",
+    "stage1": "Stage 1 — hard filter",
+    "stage2": "Stage 2 — ranking",
+    "stage3": "Stage 3 — scoring",
+}
 
 
 @contextmanager
-def record_calls(run, step, candidate=None):
-    """Persist one LlmCall for every LLM call made inside this block.
+def record_step(run, step):
+    """Total every LLM call made inside this block into `run.step_costs[step]`.
 
-    Writing happens in a `finally`, and deliberately outside any surrounding transaction:
-    a call that succeeded was paid for even when the work is later discarded. Stage 2
-    throws away every score it collected if one candidate fails, and those calls must
-    still appear on the bill.
+    Saved in a `finally`: a step that fails half way still spent what it spent, and the
+    recruiter pressing the button again deserves to see that it cost something.
     """
     with collect_usage() as calls:
         try:
             yield
         finally:
-            LlmCall.objects.bulk_create([
-                LlmCall(
-                    run=run,
-                    candidate=candidate,
-                    step=step,
-                    model_name=call.model,
-                    input_tokens=call.input_tokens,
-                    cached_input_tokens=call.cached_input_tokens,
-                    output_tokens=call.output_tokens,
-                    reasoning_tokens=call.reasoning_tokens,
-                    duration_ms=call.duration_ms,
-                )
-                for call in calls
-            ])
+            _save_step(run, step, calls)
 
 
-def format_tokens(count: int) -> str:
-    return f"{count:,}"
+def _save_step(run, step, calls) -> None:
+    if not calls:
+        # No call, no entry. `evaluate_hard_filters` short-circuits when the JD has no
+        # must-haves — that is a step which never ran, not a step that cost $0.00, and
+        # the two must not read the same on screen.
+        return
+
+    # Re-read first: another step of this run may have been written by a different
+    # process since this object was loaded, and a whole-dict assignment would drop it.
+    run.refresh_from_db(fields=["step_costs"])
+    costs = dict(run.step_costs or {})
+    costs[step] = {
+        "calls": len(calls),
+        "input_tokens": sum(call.input_tokens for call in calls),
+        "cached_input_tokens": sum(call.cached_input_tokens for call in calls),
+        "output_tokens": sum(call.output_tokens for call in calls),
+        "reasoning_tokens": sum(call.reasoning_tokens for call in calls),
+        "seconds": round(sum(call.duration_ms for call in calls) / 1000, 3),
+        "model": calls[-1].model,
+    }
+    # Overwrites rather than accumulates: re-running a step replaces its work, so it must
+    # replace its cost too.
+    run.step_costs = costs
+    run.save(update_fields=["step_costs"])
 
 
 def format_seconds(seconds: float) -> str:
-    """Seconds under a minute, minutes and seconds above it.
-
-    A stage over a large field runs into minutes, and "184.3 s" is a number the reader has
-    to divide in their head.
-    """
+    """Seconds under a minute, minutes and seconds above it — a step over a large field
+    runs into minutes, and "184.3 s" is a number the reader has to divide in their head."""
     if seconds < 60:
         return f"{seconds:.1f} s"
     minutes, remainder = divmod(int(round(seconds)), 60)
     return f"{minutes} min {remainder:02d} s"
 
 
-def format_cost(cost) -> str:
-    """Four decimal places: one screening call costs a fraction of a cent, and rounding to
-    two would show most of this table as €0.00."""
-    return "—" if cost is None else f"€{cost:.4f}"
+def step_cost(run, step) -> dict | None:
+    """What one step cost, ready to render. None when the step has not run."""
+    data = (run.step_costs or {}).get(step)
+    if not data:
+        return None
 
-
-def _cost_of(token_groups, prices):
-    """Price one step's calls, grouped by model.
-
-    Returns None if any model involved has no rate — a partially priced total looks like a
-    real number and is not one. Grouping by model matters because OPENAI_MODEL can change
-    between runs, or mid-run, and the rows would then be billed at the wrong rate.
-    """
-    total = Decimal(0)
-    for group in token_groups:
-        price = prices.get(group["model_name"])
-        if price is None:
-            return None
-        total += price.cost_for(
-            group["input_tokens"], group["cached_input_tokens"], group["output_tokens"]
-        )
-    return total
-
-
-def run_cost_summary(run) -> dict:
-    """Per-step calls, tokens, time and cost for one run, plus a total.
-
-    Two queries regardless of how many steps have run: one grouped by step for the
-    counters, one grouped by step and model for the pricing.
-    """
-    aggregates = {
-        "calls": Count("pk"),
-        # distinct, and NULLs are not counted — so JD extraction, which has no candidate,
-        # correctly reports zero and gets no per-CV figure.
-        "candidates": Count("candidate", distinct=True),
-        "input_tokens": Sum("input_tokens"),
-        "cached_input_tokens": Sum("cached_input_tokens"),
-        "output_tokens": Sum("output_tokens"),
-        "duration_ms": Sum("duration_ms"),
-    }
-    by_step = {
-        row["step"]: row
-        for row in LlmCall.objects.filter(run=run).values("step").annotate(**aggregates)
-    }
-    by_step_and_model = {}
-    for row in (LlmCall.objects.filter(run=run)
-                .values("step", "model_name")
-                .annotate(input_tokens=Sum("input_tokens"),
-                          cached_input_tokens=Sum("cached_input_tokens"),
-                          output_tokens=Sum("output_tokens"))):
-        by_step_and_model.setdefault(row["step"], []).append(row)
-
-    prices = {price.model_name: price for price in ModelPrice.objects.all()}
-    models_used = sorted({row["model_name"] for rows in by_step_and_model.values() for row in rows})
-    unpriced = [name for name in models_used if name not in prices]
-
-    rows, totals = [], {"calls": 0, "tokens": 0, "cached": 0, "seconds": 0.0, "cost": Decimal(0)}
-    any_unpriced = False
-
-    for step in LlmCall.STEP_ORDER:
-        data = by_step.get(step)
-        if data is None:
-            continue  # a step that has not run yet is left out rather than shown as zero
-        tokens = data["input_tokens"] + data["output_tokens"]
-        seconds = data["duration_ms"] / 1000
-        candidates = data["candidates"]
-        cost = _cost_of(by_step_and_model.get(step, []), prices)
-
-        rows.append({
-            "step": step,
-            "label": STEP_LABELS[step],
-            "calls": data["calls"],
-            "candidates": candidates,
-            "tokens": tokens,
-            "cached_tokens": data["cached_input_tokens"],
-            "seconds": seconds,
-            "seconds_per_cv": seconds / candidates if candidates else None,
-            "cost": cost,
-            "tokens_display": format_tokens(tokens),
-            "seconds_display": format_seconds(seconds),
-            "per_cv_display": format_seconds(seconds / candidates) if candidates else "—",
-            "cost_display": format_cost(cost),
-        })
-
-        totals["calls"] += data["calls"]
-        totals["tokens"] += tokens
-        totals["cached"] += data["cached_input_tokens"]
-        totals["seconds"] += seconds
-        if cost is None:
-            any_unpriced = True
-        else:
-            totals["cost"] += cost
-
-    total_cost = None if (any_unpriced or not rows) else totals["cost"]
+    input_tokens = data.get("input_tokens", 0)
+    cached = data.get("cached_input_tokens", 0)
+    output_tokens = data.get("output_tokens", 0)
+    seconds = data.get("seconds", 0)
+    cost = cost_usd(input_tokens, cached, output_tokens)
 
     return {
-        "rows": rows,
-        "has_calls": bool(rows),
-        "models_used": models_used,
-        "unpriced_models": unpriced,
-        "total": {
-            "calls": totals["calls"],
-            "tokens": totals["tokens"],
-            "cached_tokens": totals["cached"],
-            "seconds": totals["seconds"],
-            "cost": total_cost,
-            "tokens_display": format_tokens(totals["tokens"]),
-            "seconds_display": format_seconds(totals["seconds"]),
-            "cost_display": format_cost(total_cost),
-        },
+        "step": step,
+        "label": STEP_LABELS.get(step, step),
+        "calls": data.get("calls", 0),
+        "seconds": seconds,
+        "seconds_display": format_seconds(seconds),
+        "cost": cost,
+        "cost_display": format_usd(cost),
+        "input_display": f"{input_tokens:,}",
+        "cached_display": f"{cached:,}",
+        "output_display": f"{output_tokens:,}",
+        "model": data.get("model", ""),
+        # Printed next to the figure so the number is checkable rather than asserted.
+        "rates": RATE_SUMMARY,
     }
-
-
-def candidate_cost_rows(run) -> dict:
-    """Per-candidate seconds and cost for each step, keyed by candidate id.
-
-    The panel shows per-step averages; this is the per-CV detail behind them, for the
-    exports. Shape: {candidate_id: {step: {"seconds": float, "cost": Decimal|None}}}.
-    """
-    prices = {price.model_name: price for price in ModelPrice.objects.all()}
-    rows: dict[int, dict[str, dict]] = {}
-    for call in LlmCall.objects.filter(run=run).exclude(candidate=None):
-        entry = rows.setdefault(call.candidate_id, {}).setdefault(
-            call.step, {"seconds": 0.0, "cost": Decimal(0), "priced": True}
-        )
-        entry["seconds"] += call.duration_ms / 1000
-        price = prices.get(call.model_name)
-        if price is None:
-            entry["priced"] = False
-        elif entry["priced"]:
-            entry["cost"] += price.cost_for(
-                call.input_tokens, call.cached_input_tokens, call.output_tokens
-            )
-    for steps in rows.values():
-        for entry in steps.values():
-            if not entry["priced"]:
-                entry["cost"] = None
-    return rows

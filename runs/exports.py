@@ -1,11 +1,10 @@
 """Excel summary of a screening run — one row per candidate, readable by a hiring manager.
 
-Three sheets:
+Two sheets:
   "Candidates"  — every candidate, which stages they passed or failed, why they stopped
                   where they did, and the final score for anyone who reached Stage 3.
   "Run summary" — the job description's requirements and the settings the stages ran
                   with, so the numbers on sheet 1 can be interpreted months later.
-  "LLM cost"    — what the run cost and how long each step took, per step and per CV.
 
 Reads `candidate_history()`, the same assembled view the Final Review page renders, so
 the spreadsheet and the screen can never disagree.
@@ -20,9 +19,8 @@ from openpyxl.utils import get_column_letter
 
 from screening.stage2_ranking.ranking import shortlist_size
 
-from .models import LlmCall, StageResult
+from .models import StageResult
 from .services import candidate_history
-from .usage import STEP_LABELS, candidate_cost_rows, format_cost, format_seconds, run_cost_summary
 
 HEADER_FILL = PatternFill("solid", fgColor="1F3864")
 HEADER_FONT = Font(color="FFFFFF", bold=True, size=11)
@@ -169,7 +167,6 @@ def _write_summary_sheet(sheet, run, rows):
 
     scored = [r for r in rows if r["stage3"] is not None]
     ranked = [r for r in rows if r["stage2"] is not None]
-    cost = run_cost_summary(run)
     facts = [
         ("Current stage", run.get_current_stage_display()),
         ("Created", run.created_at.strftime("%Y-%m-%d %H:%M")),
@@ -181,9 +178,6 @@ def _write_summary_sheet(sheet, run, rows):
         ("Stage 2 keywords", ", ".join(run.stage2_keywords) or "(none)"),
         ("Scored at Stage 3", len(scored)),
         ("Recruiter overrides", sum(len(r["overrides"]) for r in rows)),
-        ("LLM calls made", cost["total"]["calls"]),
-        ("Total inference time", cost["total"]["seconds_display"]),
-        ("Total LLM cost", cost["total"]["cost_display"]),
     ]
     for offset, (label, value) in enumerate(facts):
         row = 3 + offset
@@ -206,84 +200,11 @@ def _write_summary_sheet(sheet, run, rows):
             sheet.cell(row=row, column=3).fill = FAIL_FILL   # gated: the strictest type
 
 
-COST_STEPS = LlmCall.STEP_ORDER
-
-
-def _write_cost_sheet(sheet, run, rows):
-    """What the run cost, per step and then per candidate.
-
-    The per-step block answers "where did the money and the time go"; the per-candidate
-    block below it is the inference time for one CV at each step, which the on-screen
-    panel only shows as an average.
-    """
-    sheet.title = "LLM cost"
-    sheet.column_dimensions["A"].width = 30
-    for letter in "BCDEF":
-        sheet.column_dimensions[letter].width = 15
-    sheet.column_dimensions["B"].width = 26          # candidate names in the lower block
-
-    sheet["A1"] = f"Screening run #{run.pk} — LLM cost and inference time"
-    sheet["A1"].font = TITLE_FONT
-
-    cost = run_cost_summary(run)
-    if not cost["has_calls"]:
-        sheet["A3"] = "No LLM calls have been recorded for this run yet."
-        return
-
-    if cost["unpriced_models"]:
-        sheet["A2"] = ("No price is configured for "
-                       + ", ".join(cost["unpriced_models"])
-                       + " — token counts and timings are exact, cost is not available.")
-        sheet["A2"].font = Font(italic=True, color="808080")
-
-    header_row = 4
-    for index, title in enumerate(["Step", "Calls", "Tokens", "Time", "Per CV", "Cost"], start=1):
-        cell = sheet.cell(row=header_row, column=index, value=title)
-        cell.fill, cell.font = HEADER_FILL, HEADER_FONT
-
-    for offset, row in enumerate(cost["rows"], start=1):
-        values = [row["label"], row["calls"], row["tokens"],
-                  row["seconds_display"], row["per_cv_display"], row["cost_display"]]
-        for index, value in enumerate(values, start=1):
-            sheet.cell(row=header_row + offset, column=index, value=value).border = BORDER
-
-    total_row = header_row + len(cost["rows"]) + 1
-    totals = ["Total", cost["total"]["calls"], cost["total"]["tokens"],
-              cost["total"]["seconds_display"], "—", cost["total"]["cost_display"]]
-    for index, value in enumerate(totals, start=1):
-        cell = sheet.cell(row=total_row, column=index, value=value)
-        cell.font, cell.fill, cell.border = Font(bold=True), MUTED_FILL, BORDER
-
-    # --- per candidate, per step -------------------------------------------------
-    start = total_row + 3
-    sheet.cell(row=start - 1, column=1, value="Per candidate").font = TITLE_FONT
-    per_candidate = candidate_cost_rows(run)
-    steps = [s for s in COST_STEPS if any(s in v for v in per_candidate.values())]
-
-    titles = ["CV file"] + [f"{STEP_LABELS[s]} — time" for s in steps] + \
-             [f"{STEP_LABELS[s]} — cost" for s in steps]
-    for index, title in enumerate(titles, start=1):
-        cell = sheet.cell(row=start, column=index, value=title)
-        cell.fill, cell.font = HEADER_FILL, HEADER_FONT
-        sheet.column_dimensions[get_column_letter(index)].width = max(16, len(title) + 2)
-
-    for offset, row in enumerate(rows, start=1):
-        by_step = per_candidate.get(row["candidate"].pk, {})
-        values = [row["candidate"].original_filename]
-        values += [format_seconds(by_step[s]["seconds"]) if s in by_step else "" for s in steps]
-        values += [format_cost(by_step[s]["cost"]) if s in by_step else "" for s in steps]
-        for index, value in enumerate(values, start=1):
-            sheet.cell(row=start + offset, column=index, value=value).border = BORDER
-
-    sheet.freeze_panes = "B1"
-
-
 def build_summary_workbook(run) -> Workbook:
-    """The whole run as a three-sheet workbook."""
+    """The whole run as a two-sheet workbook."""
     rows = candidate_history(run)
 
     workbook = Workbook()
     _write_candidates_sheet(workbook.active, run, rows)
     _write_summary_sheet(workbook.create_sheet(), run, rows)
-    _write_cost_sheet(workbook.create_sheet(), run, rows)
     return workbook
