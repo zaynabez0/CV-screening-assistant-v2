@@ -147,8 +147,6 @@
     <p class="muted">Stage 3 has not run yet for this run.</p>
   {% endif %}
 
-  {% include "runs/_cost_panel.html" %}
-
   {% if run.job_status == "running" %}
   <script>
     const statusUrl = "{% url 'runs:job_status' run.pk %}";

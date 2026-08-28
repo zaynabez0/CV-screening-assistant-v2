@@ -1719,10 +1719,10 @@ def test_xlsx_is_served_as_a_spreadsheet_download(client, full_run):
     assert f'filename="run-{full_run["run"].pk}-summary.xlsx"' in response["Content-Disposition"]
 
 
-def test_xlsx_has_all_three_sheets(client, full_run):
+def test_xlsx_has_both_sheets(client, full_run):
     _, book = open_xlsx(client, full_run["run"])
 
-    assert book.sheetnames == ["Candidates", "Run summary", "LLM cost"]
+    assert book.sheetnames == ["Candidates", "Run summary"]
 
 
 def test_every_candidate_gets_a_row_including_those_who_never_ran(client, full_run):

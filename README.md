@@ -293,55 +293,17 @@ Stage 1 — nobody silently disappears from the record.
 
 Both files carry candidate names and emails. Treat the downloads as personal data.
 
-## 9. What a run costs
-
-Every LLM call is timed and its token usage recorded, and each review page and the Final
-Review carry a **Run cost** panel:
-
-| Step | Calls | Tokens | Time | Per CV | Cost |
-|---|---|---|---|---|---|
-| JD extraction | 1 | 2,310 | 4.1 s | — | €0.0074 |
-| CV structuring | 12 | 61,200 | 41.0 s | 3.4 s | €0.1710 |
-| Stage 1 — hard filter | 12 | 40,560 | 42.8 s | 3.6 s | €0.0728 |
-| Stage 2 — ranking | 9 | 52,200 | 34.2 s | 3.8 s | €0.1213 |
-| Stage 3 — scoring | 3 | 19,200 | 14.3 s | 4.8 s | €0.0440 |
-| **Total** | **37** | **175,470** | **2 min 16 s** | — | **€0.4163** |
-
-**Per CV** is the average inference time for one candidate at that step — JD extraction
-has none, being one call for the whole run. The Excel and CSV exports carry the same
-figures for each candidate individually.
-
-### Set your rates first
-
-No prices are built in. This app cannot know what your key is billed, particularly
-through a gateway sub-key, and a hardcoded guess would produce confident wrong numbers.
-Until you enter rates the panel shows exact token counts and timings with the cost column
-blank, and says which model is unpriced.
-
-Add them at **<http://127.0.0.1:8000/admin/runs/modelprice/>** — the model id (`gpt-5.6-luna`
-unless you set `OPENAI_MODEL`) and three rates in **EUR per million tokens**: input,
-cached input, and output. All three come from your provider's pricing page.
-
-The cached-input rate is worth getting right. Stages 1, 2 and 3 send the same job
-description and rubric with every candidate, which the API caches and bills at a fraction
-of the normal input rate — in the table above that is why Stage 1 costs less than CV
-structuring despite a similar token count.
-
-Cost is **computed from stored token counts, not frozen when the call is made**, so
-entering a rate prices every run that has already finished, and correcting a rate corrects
-history. The token counts themselves never change.
-
-## 10. Run the tests
+## 9. Run the tests
 
 ```bash
-python -m pytest              # 413 passed
+python -m pytest              # 376 passed
 python -m pytest -v           # see individual test names
 ```
 
 Nothing is skipped and nothing reaches the network — the LLM is mocked throughout,
 Stage 2 included.
 
-## 11. Project layout
+## 10. Project layout
 
 ```
 config/          Django settings, URLs
@@ -355,8 +317,7 @@ screening/       ALL pipeline logic — pure Python, ZERO Django imports
   tests/           pytest suite + fixtures
 candidates/      Candidate model, upload & review views
 jobs/            JobDescription model, JD input + review/edit views
-runs/            ScreeningRun, StageResult, Override, LlmCall, ModelPrice,
-                 run list, stage views, usage.py (cost + timing roll-up),
+runs/            ScreeningRun, StageResult, Override, run list, stage views,
                  exports.py (Excel summary) + CSV export
 ```
 
@@ -364,24 +325,22 @@ The rule that matters: **`screening/` never imports Django.** Django views call 
 never the reverse. That is why the pipeline logic can be tested without a database or a
 web server, and it is enforced by a check in the test suite.
 
-## 12. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
 | `ImportError: failed to find libmagic.  Check your installation` | The system library is missing — see [Prerequisites](#1-prerequisites). |
 | `No LLM API key found in the environment. Set one of: ...` | Neither key variable is set. Check `.env` exists in the project root and holds `OPENAI_API_KEY` or `KEY_REGULATOR_API_KEY`. |
 | `404` or "model not found" from a gateway | Usually the **model id**, not the key. Gateways often rename models — set `OPENAI_MODEL` to whatever yours exposes. |
-| Connection errors on any stage, JD or CV structuring | These are all LLM calls now. Check `OPENAI_BASE_URL` or `BASE_URL` points at your gateway; run the check snippet in [§3](#3-set-your-api-key). |
+| Connection errors only on Stages 1/3, JD or CV structuring | Those are the LLM calls. Check `OPENAI_BASE_URL` or `BASE_URL` points at your gateway; run the check snippet in [§3](#3-set-your-api-key). |
 | Upload page says the run is at the wrong stage | Confirm the job description first — that is what moves the run to `cv_pending`. |
 | "The job description's requirements have not been confirmed yet" | Press **Confirm requirements and continue** on the JD review page. |
 | Stage 2 is slow | It makes one API call per surviving candidate. The progress counter advances once per call. |
-| The Run cost panel shows `—` for every cost | No rate is set for the model. Add one at `/admin/runs/modelprice/` — see [§9](#9-what-a-run-costs). Token counts and timings are unaffected. |
-| The Run cost panel is missing entirely | No LLM call has been recorded for that run yet. It appears as soon as one is. |
 | A stage says "failed" with a network error | Expected if the API is unreachable. Fix the connection and press the button again — re-running replaces the previous results rather than duplicating them. |
 | `database is locked` | SQLite limitation: a background stage and the web UI wrote at the same time. Retry. Known and accepted for v1. |
 | A confirmed job description can't be edited | By design — the stages already judged against it would no longer match. Start a new run. |
 
-## 13. Before this goes anywhere near real candidate data
+## 12. Before this goes anywhere near real candidate data
 
 This is a development build. Three things must be fixed first:
 
