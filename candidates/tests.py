@@ -14,6 +14,7 @@ from django.urls import reverse
 from candidates.models import Candidate
 from jobs.models import JobDescription
 from runs.models import ScreeningRun
+from runs.services import run_cv_structuring
 
 FIXTURES = Path(__file__).resolve().parent.parent / "screening" / "tests" / "fixtures"
 
@@ -53,6 +54,19 @@ def fake_extraction(**overrides):
     return base
 
 
+def structure(run, **patch_kwargs):
+    """Structure the run's pending CVs, the way the background command does.
+
+    Structuring is a subprocess-launched management command now, so these tests call the
+    service directly rather than posting to a view — the same arrangement runs/tests.py
+    already uses for the three stages. Returns the mock so callers can assert on the call.
+    """
+    patch_kwargs.setdefault("return_value", fake_extraction())
+    with patch("runs.services.structure_candidate", **patch_kwargs) as mock:
+        run_cv_structuring(run)
+    return mock
+
+
 # --- Upload -------------------------------------------------------------------
 
 def test_upload_accepts_a_clean_pdf(client, run):
@@ -67,7 +81,7 @@ def test_upload_accepts_a_clean_pdf(client, run):
 
 
 def test_upload_does_not_call_the_llm(client, run):
-    with patch("candidates.views.structure_candidate") as mock:
+    with patch("runs.services.structure_candidate") as mock:
         client.post(reverse("candidates:upload", args=[run.pk]),
                     {"cvs": [upload_file("clean_cv.pdf")]})
 
@@ -130,8 +144,7 @@ def test_upload_is_blocked_when_the_run_is_at_another_stage(client, run):
 def test_structuring_is_a_separate_user_triggered_step(client, run):
     client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
 
-    with patch("candidates.views.structure_candidate", return_value=fake_extraction()) as mock:
-        client.post(reverse("candidates:structure", args=[run.pk]))
+    mock = structure(run, return_value=fake_extraction())
 
     mock.assert_called_once()
     candidate = Candidate.objects.get(run=run)
@@ -142,8 +155,7 @@ def test_structuring_is_a_separate_user_triggered_step(client, run):
 def test_structuring_receives_the_extracted_cv_text(client, run):
     client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
 
-    with patch("candidates.views.structure_candidate", return_value=fake_extraction()) as mock:
-        client.post(reverse("candidates:structure", args=[run.pk]))
+    mock = structure(run, return_value=fake_extraction())
 
     assert "Amina Benali" in mock.call_args.args[0]     # real text from the PDF, not the filename
 
@@ -152,8 +164,7 @@ def test_structuring_skips_rejected_candidates(client, run):
     client.post(reverse("candidates:upload", args=[run.pk]),
                 {"cvs": [upload_file("no_text_layer.pdf"), upload_file("clean_cv.pdf")]})
 
-    with patch("candidates.views.structure_candidate", return_value=fake_extraction()) as mock:
-        client.post(reverse("candidates:structure", args=[run.pk]))
+    mock = structure(run, return_value=fake_extraction())
 
     assert mock.call_count == 1                        # only the valid one
 
@@ -163,16 +174,14 @@ def test_an_llm_failure_leaves_the_candidate_retryable(client, run):
     than being marked rejected, which would look like the CV was at fault."""
     client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
 
-    with patch("candidates.views.structure_candidate", side_effect=RuntimeError("API down")):
-        client.post(reverse("candidates:structure", args=[run.pk]))
+    structure(run, side_effect=RuntimeError("API down"))
 
     candidate = Candidate.objects.get(run=run)
     assert candidate.status == "pending"
     assert "structuring failed" in candidate.rejection_reason
     assert candidate.extracted_json is None
 
-    with patch("candidates.views.structure_candidate", return_value=fake_extraction()):
-        client.post(reverse("candidates:structure", args=[run.pk]))
+    structure(run, return_value=fake_extraction())
 
     candidate.refresh_from_db()
     assert candidate.status == "ready"
@@ -183,8 +192,7 @@ def test_an_llm_failure_leaves_the_candidate_retryable(client, run):
 
 def test_review_page_shows_the_extracted_json_and_confidence(client, run):
     client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
-    with patch("candidates.views.structure_candidate", return_value=fake_extraction()):
-        client.post(reverse("candidates:structure", args=[run.pk]))
+    structure(run, return_value=fake_extraction())
 
     html = client.get(reverse("candidates:review", args=[run.pk])).content.decode()
 
@@ -196,8 +204,7 @@ def test_review_page_shows_the_extracted_json_and_confidence(client, run):
 def test_low_confidence_extraction_is_visually_flagged(client, run):
     client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
     payload = fake_extraction(extraction_confidence="low", extraction_notes="Two-column layout garbled.")
-    with patch("candidates.views.structure_candidate", return_value=payload):
-        client.post(reverse("candidates:structure", args=[run.pk]))
+    structure(run, return_value=payload)
 
     response = client.get(reverse("candidates:review", args=[run.pk]))
     html = response.content.decode()
@@ -210,8 +217,7 @@ def test_low_confidence_extraction_is_visually_flagged(client, run):
 
 def test_high_confidence_extraction_is_not_flagged(client, run):
     client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
-    with patch("candidates.views.structure_candidate", return_value=fake_extraction()):
-        client.post(reverse("candidates:structure", args=[run.pk]))
+    structure(run, return_value=fake_extraction())
 
     response = client.get(reverse("candidates:review", args=[run.pk]))
 
@@ -233,8 +239,7 @@ def test_review_shows_rejected_candidates_too(client, run):
 
 def test_confirming_advances_the_run_to_stage1(client, run):
     client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
-    with patch("candidates.views.structure_candidate", return_value=fake_extraction()):
-        client.post(reverse("candidates:structure", args=[run.pk]))
+    structure(run, return_value=fake_extraction())
 
     client.post(reverse("candidates:confirm", args=[run.pk]))
 
@@ -249,8 +254,7 @@ def test_the_confirmed_review_page_links_on_to_stage_1(client, run):
     where to go instead of leaving a disabled button and a red banner behind.
     """
     client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
-    with patch("candidates.views.structure_candidate", return_value=fake_extraction()):
-        client.post(reverse("candidates:structure", args=[run.pk]))
+    structure(run, return_value=fake_extraction())
     client.post(reverse("candidates:confirm", args=[run.pk]))
 
     html = client.get(reverse("candidates:review", args=[run.pk])).content.decode()
@@ -263,8 +267,7 @@ def test_the_confirmed_review_page_links_on_to_stage_1(client, run):
 def test_the_unconfirmed_review_page_still_offers_the_button_and_no_link(client, run):
     """The forward link must not appear before the checkpoint is actually confirmed."""
     client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
-    with patch("candidates.views.structure_candidate", return_value=fake_extraction()):
-        client.post(reverse("candidates:structure", args=[run.pk]))
+    structure(run, return_value=fake_extraction())
 
     html = client.get(reverse("candidates:review", args=[run.pk])).content.decode()
 
@@ -287,8 +290,7 @@ def test_a_run_stuck_before_this_stage_still_gets_the_blocked_banner(client, run
 def test_structuring_alone_does_not_advance_the_run(client, run):
     """No stage auto-runs the next. Only the human confirmation moves current_stage."""
     client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
-    with patch("candidates.views.structure_candidate", return_value=fake_extraction()):
-        client.post(reverse("candidates:structure", args=[run.pk]))
+    structure(run, return_value=fake_extraction())
 
     run.refresh_from_db()
     assert run.current_stage == "cv_pending"
@@ -301,3 +303,88 @@ def test_cannot_confirm_with_nothing_structured(client, run):
 
     run.refresh_from_db()
     assert run.current_stage == "cv_pending"
+
+
+# --- Structuring is a background job now ---------------------------------------
+
+def test_pressing_structure_returns_immediately_and_spawns_the_job(client, run):
+    """It used to loop the LLM inline and hold the request open for the whole batch.
+    Now it hands off, so the page can come back and show a progress bar."""
+    client.post(reverse("candidates:upload", args=[run.pk]),
+                {"cvs": [upload_file("clean_cv.pdf")]})
+
+    with patch("candidates.views.subprocess.Popen") as popen:
+        with patch("runs.services.structure_candidate") as llm:
+            response = client.post(reverse("candidates:structure", args=[run.pk]))
+
+    assert response.status_code == 302
+    llm.assert_not_called()                       # the work happens in the subprocess
+    assert popen.call_args.args[0][2] == "run_cv_structuring"
+
+    run.refresh_from_db()
+    assert run.job_status == "running"
+    assert run.job_stage == "cv_structuring"      # 14 chars — needs the widened column
+    assert run.job_total == 1
+
+
+def test_structuring_refuses_while_a_job_is_already_running(client, run):
+    client.post(reverse("candidates:upload", args=[run.pk]),
+                {"cvs": [upload_file("clean_cv.pdf")]})
+    run.mark_job_started("cv_structuring", total=1)
+
+    with patch("candidates.views.subprocess.Popen") as popen:
+        client.post(reverse("candidates:structure", args=[run.pk]))
+
+    popen.assert_not_called()
+
+
+def test_the_review_page_shows_a_progress_bar_while_structuring_runs(client, run):
+    client.post(reverse("candidates:upload", args=[run.pk]),
+                {"cvs": [upload_file("clean_cv.pdf")]})
+    run.mark_job_started("cv_structuring", total=4)
+    run.mark_job_progress(1)
+
+    html = client.get(reverse("candidates:review", args=[run.pk])).content.decode()
+
+    assert 'class="bar-fill"' in html
+    assert "width: 25%" in html
+    assert "1 / 4" in html
+
+
+def test_the_structure_button_is_hidden_while_the_job_runs(client, run):
+    client.post(reverse("candidates:upload", args=[run.pk]),
+                {"cvs": [upload_file("clean_cv.pdf")]})
+    run.mark_job_started("cv_structuring", total=1)
+
+    html = client.get(reverse("candidates:review", args=[run.pk])).content.decode()
+
+    assert "validated CV(s) with the LLM" not in html
+
+
+def test_confirming_is_refused_while_structuring_is_still_running(client, run):
+    client.post(reverse("candidates:upload", args=[run.pk]),
+                {"cvs": [upload_file("clean_cv.pdf")]})
+    structure(run)
+    run.mark_job_started("cv_structuring", total=1)
+
+    client.post(reverse("candidates:confirm", args=[run.pk]))
+
+    run.refresh_from_db()
+    assert run.current_stage == "cv_pending"       # not advanced
+
+
+def test_the_structuring_price_shows_above_the_confirm_button(client, run):
+    client.post(reverse("candidates:upload", args=[run.pk]),
+                {"cvs": [upload_file("clean_cv.pdf")]})
+    structure(run)
+    run.step_costs = {"cv_structuring": {
+        "calls": 3, "input_tokens": 10_000, "cached_input_tokens": 4_000,
+        "output_tokens": 2_000, "reasoning_tokens": 0, "seconds": 9.4, "model": "x",
+    }}
+    run.save(update_fields=["step_costs"])
+
+    html = client.get(reverse("candidates:review", args=[run.pk])).content.decode()
+
+    assert "This step cost" in html
+    assert "$0.0037" in html
+    assert "3 LLM calls" in html

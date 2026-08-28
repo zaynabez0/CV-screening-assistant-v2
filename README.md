@@ -258,7 +258,7 @@ run; nothing advances on its own.
 |---|---|---|
 | 0 | `/run/1/jd/review/` | (above) Extract, edit and confirm requirements → `cv_pending` |
 | 1 | `/run/1/cvs/upload/` | Upload PDF/DOCX CVs. This only **validates** — no LLM call yet. |
-| 2 | `/run/1/cvs/review/` | Press **Structure** to send them to the LLM, check each extraction, then **Confirm** → `stage1_pending` |
+| 2 | `/run/1/cvs/review/` | Press **Structure** — it runs in the background with a progress bar — check each extraction, then **Confirm** → `stage1_pending` |
 | 3 | `/run/1/stage1/review/` | **Run Stage 1**, read every pass *and* fail with reasons, then **Confirm** → `stage2_pending` |
 | 4 | `/run/1/stage2/review/` | Edit keywords and the cutoff %, **Run Stage 2**, then **Confirm** → `stage3_pending` |
 | 5 | `/run/1/stage3/review/` | Adjust criterion weights, **Run Stage 3**, then **Confirm** → `review` |
@@ -293,22 +293,61 @@ Stage 1 — nobody silently disappears from the record.
 
 Both files carry candidate names and emails. Treat the downloads as personal data.
 
-## 9. Run the tests
+## 9. What each step costs
+
+Every LLM call is timed and its tokens counted, and each checkpoint shows what that step
+spent, right above the button that moves the run on:
+
+> This step cost **$0.0093** — 12 LLM calls, 41.0 s.
+> 34,800 input tokens (25,200 cached) and 5,760 output, at $0.20 in / $0.02 cached /
+> $1.20 out per M tokens.
+
+The token counts and the rates are printed next to the figure on purpose: the price is
+checkable by hand rather than something the page merely asserts.
+
+### Changing the rates
+
+They are three constants at the top of `screening/common/pricing.py`:
+
+```python
+USD_PER_MILLION_INPUT = Decimal("0.20")
+USD_PER_MILLION_CACHED_INPUT = Decimal("0.02")
+USD_PER_MILLION_OUTPUT = Decimal("1.20")
+```
+
+Edit them and nothing else moves. Cost is computed from stored token counts every time it
+is displayed, so a rate change re-prices runs that have already finished — there is no
+saved figure to go stale, and no model id to match, which is what a previous version got
+wrong: rates keyed on a model name silently priced nothing whenever the gateway exposed
+the model under a different id.
+
+**The cached rate matters.** Stages 1, 2 and 3 send the same job description and rubric
+with every candidate, and the API bills that repeated prefix at a tenth of the normal
+input rate. In the example above, 25,200 of the 34,800 input tokens were cached — which is
+why Stage 1 costs less than structuring despite reading more.
+
+### Progress
+
+Every step that makes one call per CV — structuring, Stage 1, Stage 2, Stage 3 — runs in a
+background process and shows a progress bar that advances one candidate at a time. JD
+extraction is a single call and has no bar; there would be nothing to count.
+
+## 10. Run the tests
 
 ```bash
-python -m pytest              # 376 passed
+python -m pytest              # 426 passed
 python -m pytest -v           # see individual test names
 ```
 
 Nothing is skipped and nothing reaches the network — the LLM is mocked throughout,
 Stage 2 included.
 
-## 10. Project layout
+## 11. Project layout
 
 ```
 config/          Django settings, URLs
 screening/       ALL pipeline logic — pure Python, ZERO Django imports
-  common/          shared text extraction (PDF/DOCX) + the one LLM helper
+  common/          text extraction (PDF/DOCX), the one LLM helper, the token rates
   jd/              JD_SCHEMA, get_jd_text, extract_requirements
   cv/              validation, CV_SCHEMA structuring, anonymization
   stage1_hard_filter/
@@ -318,29 +357,32 @@ screening/       ALL pipeline logic — pure Python, ZERO Django imports
 candidates/      Candidate model, upload & review views
 jobs/            JobDescription model, JD input + review/edit views
 runs/            ScreeningRun, StageResult, Override, run list, stage views,
-                 exports.py (Excel summary) + CSV export
+                 usage.py (per-step cost + timing), services.py (the four
+                 background jobs), exports.py (Excel summary) + CSV export
 ```
 
 The rule that matters: **`screening/` never imports Django.** Django views call into it,
 never the reverse. That is why the pipeline logic can be tested without a database or a
 web server, and it is enforced by a check in the test suite.
 
-## 11. Troubleshooting
+## 12. Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
 | `ImportError: failed to find libmagic.  Check your installation` | The system library is missing — see [Prerequisites](#1-prerequisites). |
 | `No LLM API key found in the environment. Set one of: ...` | Neither key variable is set. Check `.env` exists in the project root and holds `OPENAI_API_KEY` or `KEY_REGULATOR_API_KEY`. |
 | `404` or "model not found" from a gateway | Usually the **model id**, not the key. Gateways often rename models — set `OPENAI_MODEL` to whatever yours exposes. |
-| Connection errors only on Stages 1/3, JD or CV structuring | Those are the LLM calls. Check `OPENAI_BASE_URL` or `BASE_URL` points at your gateway; run the check snippet in [§3](#3-set-your-api-key). |
+| Connection errors on any step | These are all LLM calls now. Check `OPENAI_BASE_URL` or `BASE_URL` points at your gateway; run the check snippet in [§3](#3-set-your-api-key). |
 | Upload page says the run is at the wrong stage | Confirm the job description first — that is what moves the run to `cv_pending`. |
 | "The job description's requirements have not been confirmed yet" | Press **Confirm requirements and continue** on the JD review page. |
-| Stage 2 is slow | It makes one API call per surviving candidate. The progress counter advances once per call. |
+| Stage 2 is slow | It makes one API call per surviving candidate. Watch the progress bar — it advances once per call. |
+| A step shows no price | It has not run yet, or it made no LLM call (a JD with no must-haves skips Stage 1's call entirely). Token counts and prices only appear once a call has actually happened. |
+| The progress bar sits at 0% | The background process did not start. Check that `manage.py run_cv_structuring <run_id>` (or `run_stage1`, etc.) works from the project root. |
 | A stage says "failed" with a network error | Expected if the API is unreachable. Fix the connection and press the button again — re-running replaces the previous results rather than duplicating them. |
 | `database is locked` | SQLite limitation: a background stage and the web UI wrote at the same time. Retry. Known and accepted for v1. |
 | A confirmed job description can't be edited | By design — the stages already judged against it would no longer match. Start a new run. |
 
-## 12. Before this goes anywhere near real candidate data
+## 13. Before this goes anywhere near real candidate data
 
 This is a development build. Three things must be fixed first:
 

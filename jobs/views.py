@@ -11,6 +11,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 
 from jobs.models import JobDescription
 from runs.models import ScreeningRun
+from runs.usage import record_step, step_cost
 from screening.cv.validation import CVValidationError, check_extension, check_magic_type
 from screening.jd.extraction import extract_requirements, get_jd_text, normalize_requirement
 from screening.jd.schema import REQUIREMENT_TYPES
@@ -105,6 +106,7 @@ def jd_review(request, run_id):
         "requirement_types": REQUIREMENT_TYPES,
         "blocked": _blocked_reason(run),
         "locked": jd.confirmed_by_user,
+        "step_cost": step_cost(run, "jd_extraction"),
         "must_have_count": sum(1 for r in requirements if r.get("type") == "must_have"),
         "has_requirements": bool(requirements),
     })
@@ -131,7 +133,9 @@ def jd_extract(request, run_id):
             jd_text = get_jd_text(uploaded_file=jd.raw_file)
         else:
             jd_text = get_jd_text(free_text=jd.raw_text)
-        requirements = [normalize_requirement(r) for r in extract_requirements(jd_text)]
+        with record_step(run, "jd_extraction"):
+            extracted = extract_requirements(jd_text)
+        requirements = [normalize_requirement(r) for r in extracted]
     except Exception as exc:  # noqa: BLE001 — an API failure is not the user's fault
         messages.error(request, f"Extraction failed: {type(exc).__name__}: {exc}")
         return redirect("jobs:jd_review", run_id=run.pk)

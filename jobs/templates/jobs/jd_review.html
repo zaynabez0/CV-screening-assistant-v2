@@ -108,6 +108,7 @@
     </form>
 
     <h2>Confirm</h2>
+    {% include "runs/_step_cost.html" %}
     <p>Confirming locks this list and opens CV upload. <strong>Nothing downstream reads an
        unconfirmed list</strong>, and the list cannot be edited afterwards — the stages that
        run against it would no longer match.</p>

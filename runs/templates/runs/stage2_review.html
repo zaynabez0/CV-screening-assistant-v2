@@ -8,18 +8,7 @@
      The <strong>full ranked list</strong> is shown, not just the slice above the cutoff —
      nobody is eliminated here, the cutoff only decides who goes to Stage 3.</p>
 
-  {% if run.job_status == "running" %}
-    <div class="card" id="job-panel">
-      <p><strong>Stage 2 is running…</strong>
-         <span id="job-progress">{{ run.job_processed }} / {{ run.job_total }}</span></p>
-      <p class="muted">{{ run.job_message|default:"Working…" }}
-         One LLM call per candidate, so a large field takes a few minutes.</p>
-    </div>
-  {% elif run.job_status == "failed" and run.job_stage == "stage2" %}
-    <p class="msg error"><strong>Stage 2 failed:</strong> {{ run.job_message }}</p>
-  {% elif run.job_status == "done" and run.job_stage == "stage2" %}
-    <p class="msg success">{{ run.job_message }}</p>
-  {% endif %}
+  {% include "runs/_job_panel.html" with job_step="stage2" job_label="Stage 2" job_note="One LLM call per candidate, so a large field takes a few minutes." %}
 
   {% if stale %}
     <p class="msg warning"><strong>The keyword list has changed since this ranking was
@@ -96,6 +85,7 @@
 
     {% if run.current_stage == "stage2_pending" and run.job_status != "running" %}
       <h2>Confirm</h2>
+      {% include "runs/_step_cost.html" %}
       <p>Confirming carries the top {{ shortlist_count }} candidate(s) into Stage 3.
          Nothing runs automatically.</p>
       <form method="post" action="{% url 'runs:stage2_confirm' run.pk %}">
@@ -112,18 +102,4 @@
     <p class="muted">Stage 2 has not run yet for this run.</p>
   {% endif %}
 
-  {% if run.job_status == "running" %}
-  <script>
-    const statusUrl = "{% url 'runs:job_status' run.pk %}";
-    const poll = setInterval(async () => {
-      try {
-        const r = await fetch(statusUrl, {headers: {"X-Requested-With": "fetch"}});
-        const data = await r.json();
-        const el = document.getElementById("job-progress");
-        if (el) el.textContent = data.processed + " / " + data.total;
-        if (data.status !== "running") { clearInterval(poll); location.reload(); }
-      } catch (e) { /* transient failure — the next tick retries */ }
-    }, 2000);
-  </script>
-  {% endif %}
 {% endblock %}

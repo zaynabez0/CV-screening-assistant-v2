@@ -45,10 +45,20 @@ class ScreeningRun(models.Model):
 
     # --- async job status, polled by the frontend ---
     job_status = models.CharField(max_length=10, choices=JOB_STATUS_CHOICES, default="idle")
-    job_stage = models.CharField(max_length=10, blank=True)   # which stage the job is for
+    # 20, not 10: "cv_structuring" is 14 characters and preprocessing is a background
+    # job like the stages now.
+    job_stage = models.CharField(max_length=20, blank=True)   # which step the job is for
     job_message = models.TextField(blank=True)                # human-readable; the error text on failure
     job_processed = models.PositiveIntegerField(default=0)
     job_total = models.PositiveIntegerField(default=0)
+
+    # What each LLM-calling step of this run spent: one entry per step, keyed by the step
+    # names in runs/usage.py, each holding call count, token counts and elapsed seconds.
+    # Tokens rather than money — the price is computed on read from the rates in
+    # screening/common/pricing.py, so correcting a rate re-prices runs already finished.
+    # A JSON field rather than a table: the readout is a per-step total, so per-call rows
+    # would be storage nobody reads.
+    step_costs = models.JSONField(default=dict)
 
     def __str__(self):
         return f"Run #{self.pk} ({self.get_current_stage_display()})"
