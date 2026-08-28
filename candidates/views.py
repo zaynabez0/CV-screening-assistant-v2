@@ -9,6 +9,7 @@ from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect, render
 
 from runs.models import ScreeningRun
+from runs.usage import record_calls
 from screening.common.text_extraction import extract_text_from_file
 from screening.cv.structuring import structure_candidate
 from screening.cv.validation import (
@@ -128,7 +129,8 @@ def structure_cvs(request, run_id):
     for candidate in pending:
         try:
             text = extract_text_from_file(candidate.file.path)
-            candidate.extracted_json = structure_candidate(text)
+            with record_calls(run, "cv_structuring", candidate):
+                candidate.extracted_json = structure_candidate(text)
         except Exception as exc:  # noqa: BLE001 — an API failure is not the candidate's fault
             # Left at "pending" on purpose so the recruiter can retry without re-uploading.
             candidate.rejection_reason = f"structuring failed: {type(exc).__name__}: {exc}"

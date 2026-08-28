@@ -32,6 +32,8 @@
     <p class="msg success">{{ override_count }} recruiter override(s) logged on this run.</p>
   {% endif %}
 
+  {% include "runs/_cost_panel.html" %}
+
   <h2>Candidates ({{ rows|length }})</h2>
 
   {% for row in rows %}

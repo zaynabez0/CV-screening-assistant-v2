@@ -15,6 +15,7 @@ from screening.stage3_scoring.rubric import apply_user_weights, build_rubric, ru
 from screening.stage3_scoring.scoring import score_candidate
 
 from .models import Override, StageResult
+from .usage import record_calls
 
 
 class StageNotReady(Exception):
@@ -59,7 +60,8 @@ def run_stage1(run) -> dict:
     passed_count = 0
     for index, candidate in enumerate(candidates, start=1):
         anon = anonymize_candidate(candidate.extracted_json)
-        result = evaluate_hard_filters(anon, must_haves)
+        with record_calls(run, "stage1", candidate):
+            result = evaluate_hard_filters(anon, must_haves)
 
         StageResult.objects.create(
             run=run,
@@ -125,7 +127,8 @@ def run_stage2(run) -> dict:
     breakdown = []
     for index, candidate in enumerate(survivors, start=1):
         anon = anonymize_candidate(candidate.extracted_json)
-        breakdown.append(score_candidate_match(requirements, anon, keywords))
+        with record_calls(run, "stage2", candidate):
+            breakdown.append(score_candidate_match(requirements, anon, keywords))
         run.mark_job_progress(index)
 
     # Highest score first; ties keep upload order so the ranking is reproducible.
@@ -209,7 +212,8 @@ def run_stage3(run) -> dict:
     anomalies = 0
     for index, candidate in enumerate(shortlist, start=1):
         anon = anonymize_candidate(candidate.extracted_json)
-        criterion_scores = score_candidate(anon, weighted)
+        with record_calls(run, "stage3", candidate):
+            criterion_scores = score_candidate(anon, weighted)
         aggregated = aggregate_score(criterion_scores, weighted)
 
         StageResult.objects.create(
