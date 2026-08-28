@@ -19,6 +19,7 @@ from candidates.models import Candidate
 
 from .exports import build_summary_workbook
 from .models import Override, ScreeningRun, StageResult
+from .usage import candidate_cost_rows, run_cost_summary
 from screening.stage2_ranking.keywords import seed_keywords
 from screening.stage2_ranking.ranking import shortlist_size
 
@@ -105,6 +106,7 @@ def stage1_review(request, run_id):
 
     return render(request, "runs/stage1_review.html", {
         "run": run,
+        "cost_summary": run_cost_summary(run),
         "step_done": run.has_passed("stage1_pending"),
         "results": results,
         "passed": [r for r in results if r.passed],
@@ -192,6 +194,7 @@ def stage2_review(request, run_id):
 
     return render(request, "runs/stage2_review.html", {
         "run": run,
+        "cost_summary": run_cost_summary(run),
         "step_done": run.has_passed("stage2_pending"),
         "rows": rows,
         "keywords_text": "\n".join(run.stage2_keywords),
@@ -341,6 +344,7 @@ def stage3_review(request, run_id):
 
     return render(request, "runs/stage3_review.html", {
         "run": run,
+        "cost_summary": run_cost_summary(run),
         "step_done": run.has_passed("stage3_pending"),
         "rubric": weighted,
         "rubric_empty": not rubric,
@@ -503,6 +507,7 @@ def final_review(request, run_id):
 
     return render(request, "runs/final_review.html", {
         "run": run,
+        "cost_summary": run_cost_summary(run),
         "rows": rows,
         "override_actions": Override.ACTION_CHOICES,
         "scored_count": sum(1 for r in rows if r["stage3"] is not None),
@@ -583,7 +588,31 @@ def export_csv(request, run_id):
         "stage2_rank", "stage2_semantic", "stage2_keyword", "stage2_combined",
         "stage3_criteria", "low_confidence_flags",
         "preprocessing_status", "rejection_reason", "overrides",
+        # Appended, never inserted: everything above is positional and consumers count
+        # columns. This is the per-CV inference time the on-screen panel only averages.
+        "structuring_seconds", "structuring_cost",
+        "stage1_seconds", "stage1_cost",
+        "stage2_seconds", "stage2_cost",
+        "stage3_seconds", "stage3_cost",
     ])
+
+    per_candidate = candidate_cost_rows(run)
+
+    def cost_cells(candidate_id):
+        """Eight cells: seconds and cost for each step this candidate went through.
+
+        Blank rather than zero where a step never ran for them, and blank for cost where
+        no rate is configured — zero would read as "this was free"."""
+        by_step = per_candidate.get(candidate_id, {})
+        cells = []
+        for step in ("cv_structuring", "stage1", "stage2", "stage3"):
+            entry = by_step.get(step)
+            if entry is None:
+                cells += ["", ""]
+            else:
+                cells += [round(entry["seconds"], 3),
+                          "" if entry["cost"] is None else round(entry["cost"], 6)]
+        return cells
 
     for row in rows:
         candidate = row["candidate"]
@@ -621,6 +650,7 @@ def export_csv(request, run_id):
             "" if stage2 is None else round(stage2.output_json.get("final_score", 0), 4),
             stage3_criteria, "; ".join(row["low_confidence_flags"]),
             candidate.get_status_display(), candidate.rejection_reason, overrides,
+            *cost_cells(candidate.pk),
         ])
 
     return response
