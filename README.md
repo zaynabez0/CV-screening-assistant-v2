@@ -62,6 +62,11 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+**After every `git pull`, run `python manage.py migrate`.** New code often carries a
+schema change, and an out-of-date database fails at the first page that touches the new
+column rather than at startup. Django warns about it when the server boots — read the
+lines above the traceback.
+
 ## 3. Set your API key
 
 Copy the template and fill it in — **`.env` is loaded automatically**, so this is all
@@ -369,6 +374,7 @@ web server, and it is enforced by a check in the test suite.
 
 | Symptom | Cause and fix |
 |---|---|
+| `OperationalError: no such column: ...` right after pulling | New code, old database. Run `python manage.py migrate`. Django warns about this on startup too, a few lines above the traceback. |
 | `ImportError: failed to find libmagic.  Check your installation` | The system library is missing — see [Prerequisites](#1-prerequisites). |
 | `No LLM API key found in the environment. Set one of: ...` | Neither key variable is set. Check `.env` exists in the project root and holds `OPENAI_API_KEY` or `KEY_REGULATOR_API_KEY`. |
 | `404` or "model not found" from a gateway | Usually the **model id**, not the key. Gateways often rename models — set `OPENAI_MODEL` to whatever yours exposes. |
