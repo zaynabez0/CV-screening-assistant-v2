@@ -78,15 +78,18 @@ def run_create(request):
             messages.error(request, f"Job description rejected: {reason}")
             return render(request, "jobs/run_new.html", {})
 
+        from screening.common.ocr import ocr_available
         from screening.common.text_extraction import has_extractable_text
         if not has_extractable_text(text):
             run.delete()
             jd.delete()
-            messages.error(
-                request,
-                "Job description rejected: no extractable text found. A scanned PDF has no "
-                "text layer, and there is no OCR in v1.",
+            detail = (
+                "The file has no text layer, and OCR is not installed on this server."
+                if not ocr_available()
+                else "The file has no text layer and OCR could not read it either — a "
+                     "blurred or very low-resolution scan can defeat it."
             )
+            messages.error(request, f"Job description rejected: no extractable text found. {detail}")
             return render(request, "jobs/run_new.html", {})
 
     messages.success(request, f"Run #{run.pk} created. Extract the requirements next.")

@@ -15,12 +15,17 @@ from django.urls import reverse
 from candidates.models import Candidate
 from jobs.models import JobDescription
 from runs.models import ScreeningRun
+from screening.common import ocr
 
 FIXTURES = Path(__file__).resolve().parent.parent / "screening" / "tests" / "fixtures"
 
 pytestmark = pytest.mark.django_db
 
 JD_TEXT = "Backend Engineer. Required: 5+ years Python. Django a plus."
+
+needs_ocr = pytest.mark.skipif(
+    not ocr.ocr_available(), reason="Tesseract is not installed on this machine"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -86,12 +91,23 @@ def test_creation_does_not_call_the_llm(client):
     mock.assert_not_called()
 
 
-def test_a_scanned_job_description_is_rejected_and_no_run_is_left_behind(client):
+def test_an_unreadable_job_description_is_rejected_and_no_run_is_left_behind(client):
+    """A page of drawn shapes: no text layer and nothing OCR can recognise either."""
     client.post(reverse("jobs:run_create"),
                 {"input_mode": "upload", "raw_file": upload("no_text_layer.pdf")})
 
     assert ScreeningRun.objects.count() == 0
     assert JobDescription.objects.count() == 0
+
+
+@needs_ocr
+def test_a_scanned_job_description_is_read_by_ocr(client):
+    """A JD that arrives as a scan is as ordinary as a CV that does — same shared
+    extraction function, so it gained OCR at the same moment."""
+    client.post(reverse("jobs:run_create"),
+                {"input_mode": "upload", "raw_file": upload("scanned_cv.pdf")})
+
+    assert ScreeningRun.objects.count() == 1
 
 
 def test_a_corrupted_job_description_is_rejected(client):

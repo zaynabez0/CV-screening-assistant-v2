@@ -60,7 +60,11 @@ def run_cv_structuring(run) -> dict:
     with record_step(run, "cv_structuring"):
         for index, candidate in enumerate(pending, start=1):
             try:
-                text = extract_text_from_file(candidate.file.path)
+                # Upload validation already read this file — with OCR, for a scan. Re-reading
+                # it here would repeat that work per page for an identical result. The
+                # fallback covers candidates recorded before the text was stored.
+                text = candidate.extracted_text or extract_text_from_file(candidate.file.path)
+                candidate.extracted_text = text
                 candidate.extracted_json = structure_candidate(text)
             except Exception as exc:  # noqa: BLE001 — an API failure is not the candidate's fault
                 candidate.rejection_reason = f"structuring failed: {type(exc).__name__}: {exc}"

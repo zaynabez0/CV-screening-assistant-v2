@@ -18,7 +18,7 @@ exporting the final ranked list.
 | Part of the pipeline | Status |
 |---|---|
 | JD processing — text/file input, requirement extraction, review & edit | ✅ built and tested |
-| Shared text extraction (PDF/DOCX) | ✅ built and tested |
+| Shared text extraction — PDF, DOCX, scans and photos, OCR-backed | ✅ built and tested |
 | CV preprocessing — upload, validation, structuring, review | ✅ built and tested |
 | Stage 1 — hard filter | ✅ built and tested |
 | Stage 2 — ranking | ✅ built and tested |
@@ -48,6 +48,32 @@ score for anyone scored at Stage 3.
   # Windows: pip install python-magic-bin  (instead of python-magic)
   ```
 
+- **Tesseract OCR** — a system program, not a Python package. `pytesseract` is only a
+  wrapper around it and returns nothing useful without it. This is what reads scanned
+  CVs, photos of printed CVs, and pictures pasted into Word.
+
+  ```bash
+  # Debian / Ubuntu — the second package is the French language pack
+  sudo apt-get install tesseract-ocr tesseract-ocr-fra
+
+  # macOS (Homebrew installs all languages with it)
+  brew install tesseract
+
+  # Windows: install the UB Mannheim build, ticking "French" under
+  # "Additional language data" in the installer:
+  #   https://github.com/UB-Mannheim/tesseract/wiki
+  # Then either tick "Add to PATH" during setup, or put this in your .env:
+  #   TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
+  ```
+
+  You do **not** need Poppler or `pdf2image`: PDF pages are rasterized by `pymupdf`,
+  which pip installs for you. That is one fewer manual install on every machine, and
+  Poppler on Windows is a download-and-edit-your-PATH job.
+
+  Skipping Tesseract is survivable but lossy: CVs that carry a text layer keep working
+  exactly as before, and everything else is rejected with *"no extractable text found
+  (this file has no text layer and OCR is not installed on the server)"*.
+
 - **An OpenAI API key** — needed for CV structuring and all three screening stages.
 
 ## 2. Install
@@ -61,6 +87,37 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
 ```
+
+Then check the OCR half of that is actually wired up:
+
+```bash
+python manage.py check_ocr
+```
+
+It prints the Tesseract version, which language packs it found and which settings are in
+force — or tells you exactly what is missing. Point it at a file to do a live read:
+
+```bash
+python manage.py check_ocr screening/tests/fixtures/scanned_cv.pdf
+```
+
+That fixture is a CV that exists only as pictures. If its text comes back, OCR works.
+
+### Tuning OCR
+
+Every one of these is optional; the defaults are what runs if you set none of them.
+They go in `.env` (see `.env.example`), like the API key.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `OCR_ENABLED` | on | `0` turns OCR off — extraction falls back to text layers only. |
+| `OCR_LANGUAGES` | `eng+fra` | Language packs, `+`-joined. Each must be installed; any that is not is dropped with a warning rather than failing the file. |
+| `OCR_DPI` | `300` | Render resolution for PDF pages. 300 is what Tesseract is trained for; lower is faster and noticeably worse. |
+| `OCR_MIN_CHARS_PER_PAGE` | `100` | A page with less real text than this is treated as a scan and sent to OCR. |
+| `OCR_MAX_PAGES` | `30` | Cap on pages OCR'd per file. |
+| `OCR_CONFIG` | *(empty)* | Extra Tesseract flags, e.g. `--psm 4` for a CV laid out in columns. |
+| `OCR_DETECT_ORIENTATION` | on | Check each OCR'd page for a sideways scan first. Costs one extra pass per page. |
+| `TESSERACT_CMD` | *(empty)* | Full path to the binary, when it is installed but not on `PATH`. |
 
 **After every `git pull`, run `python manage.py migrate`.** New code often carries a
 schema change, and an out-of-date database fails at the first page that touches the new
@@ -225,7 +282,8 @@ they score alike, something is wrong — don't trust the Stage 2 ranking until i
 Open <http://127.0.0.1:8000/> — this lists every run and is where you start new ones.
 
 Press **Start a new run**, then either paste the job description text or upload it as a
-PDF or DOCX. A scanned PDF with no text layer is rejected; there is no OCR in v1.
+PDF, DOCX or an image. A file with no text layer is read with OCR, so a scan is fine —
+it just takes a second or two per page.
 
 Creating the run does *not* call the LLM. You land on the job description review page.
 
@@ -262,7 +320,7 @@ run; nothing advances on its own.
 | Step | URL | What you do |
 |---|---|---|
 | 0 | `/run/1/jd/review/` | (above) Extract, edit and confirm requirements → `cv_pending` |
-| 1 | `/run/1/cvs/upload/` | Upload PDF/DOCX CVs. This only **validates** — no LLM call yet. |
+| 1 | `/run/1/cvs/upload/` | Upload CVs — PDF, DOCX, or images of printed pages. This only **validates** — no LLM call yet, though scans are OCR'd here, which is why a batch of them is not instant. |
 | 2 | `/run/1/cvs/review/` | Press **Structure** — it runs in the background with a progress bar — check each extraction, then **Confirm** → `stage1_pending` |
 | 3 | `/run/1/stage1/review/` | **Run Stage 1**, read every pass *and* fail with reasons, then **Confirm** → `stage2_pending` |
 | 4 | `/run/1/stage2/review/` | Edit keywords and the cutoff %, **Run Stage 2**, then **Confirm** → `stage3_pending` |
@@ -340,19 +398,27 @@ extraction is a single call and has no bar; there would be nothing to count.
 ## 10. Run the tests
 
 ```bash
-python -m pytest              # 426 passed
+python -m pytest              # 466 passed
 python -m pytest -v           # see individual test names
 ```
 
-Nothing is skipped and nothing reaches the network — the LLM is mocked throughout,
-Stage 2 included.
+Nothing reaches the network — the LLM is mocked throughout, Stage 2 included, and OCR
+runs against a local binary.
+
+The only tests that skip are the ones that need a real Tesseract, and they skip
+themselves with a reason when it is not installed (`python -m pytest -rs` lists them).
+That is the same promise the code makes to the app: no Tesseract means degraded, never
+broken. The OCR *policy* — what happens when the engine is missing, when a language pack
+is not installed, when the orientation guess is worthless — is tested against a fake
+engine in `screening/tests/test_ocr.py` and always runs.
 
 ## 11. Project layout
 
 ```
 config/          Django settings, URLs
 screening/       ALL pipeline logic — pure Python, ZERO Django imports
-  common/          text extraction (PDF/DOCX), the one LLM helper, the token rates
+  common/          text extraction (PDF/DOCX/images, OCR-backed), the Tesseract
+                   plumbing, the one LLM helper, the token rates
   jd/              JD_SCHEMA, get_jd_text, extract_requirements
   cv/              validation, CV_SCHEMA structuring, anonymization
   stage1_hard_filter/
@@ -376,6 +442,11 @@ web server, and it is enforced by a check in the test suite.
 |---|---|
 | `OperationalError: no such column: ...` right after pulling | New code, old database. Run `python manage.py migrate`. Django warns about this on startup too, a few lines above the traceback. |
 | `ImportError: failed to find libmagic.  Check your installation` | The system library is missing — see [Prerequisites](#1-prerequisites). |
+| Every scanned CV is rejected with "no extractable text found" | Run `python manage.py check_ocr`. It will say whether Tesseract is missing, off (`OCR_ENABLED=0`), or installed but not on `PATH` (set `TESSERACT_CMD`). |
+| `TesseractNotFoundError` | Tesseract is installed but not on `PATH` — the usual Windows case. Set `TESSERACT_CMD` in `.env` to the full path of `tesseract.exe`. |
+| A scan is read, but the accented words are mangled | The French pack is missing: `sudo apt-get install tesseract-ocr-fra`, or re-run the Windows installer and tick French. `check_ocr` lists the packs it found. |
+| Uploading a batch of scans is slow | Expected: OCR runs at upload, a second or two per page, because validation has to know whether the file holds readable text before it says the CV was accepted. It is not repeated at structuring — the text is stored on the candidate. |
+| A scan comes back as gibberish | It is probably sideways and the orientation check could not tell. Try a higher `OCR_DPI`, or `OCR_CONFIG=--psm 4` for a columned layout. |
 | `No LLM API key found in the environment. Set one of: ...` | Neither key variable is set. Check `.env` exists in the project root and holds `OPENAI_API_KEY` or `KEY_REGULATOR_API_KEY`. |
 | `404` or "model not found" from a gateway | Usually the **model id**, not the key. Gateways often rename models — set `OPENAI_MODEL` to whatever yours exposes. |
 | Connection errors on any step | These are all LLM calls now. Check `OPENAI_BASE_URL` or `BASE_URL` points at your gateway; run the check snippet in [§3](#3-set-your-api-key). |

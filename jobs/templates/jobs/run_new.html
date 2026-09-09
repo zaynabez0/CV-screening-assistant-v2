@@ -12,7 +12,7 @@
     <p>
       <label><input type="radio" name="input_mode" value="text" checked> Paste the text</label>
       &nbsp;&nbsp;
-      <label><input type="radio" name="input_mode" value="upload"> Upload a file (PDF or DOCX)</label>
+      <label><input type="radio" name="input_mode" value="upload"> Upload a file (PDF, DOCX or a scan)</label>
     </p>
 
     <p>
@@ -22,9 +22,11 @@
 
     <p>
       <label for="raw_file">…or a file</label><br>
-      <input id="raw_file" type="file" name="raw_file" accept=".pdf,.docx">
-      <br><span class="muted">PDF and DOCX only. A scanned PDF with no text layer is
-      rejected — there is no OCR in v1.</span>
+      <input id="raw_file" type="file" name="raw_file"
+             accept=".pdf,.docx,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp">
+      <br><span class="muted">PDF, DOCX, or an image of a printed page (PNG, JPG, TIFF,
+      BMP, WEBP). A file with no text layer is read with OCR, which takes a second or
+      two per page.</span>
     </p>
 
     <button type="submit">Create run</button>

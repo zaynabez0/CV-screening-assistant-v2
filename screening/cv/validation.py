@@ -14,15 +14,31 @@ import os
 
 import magic
 
-from screening.common.text_extraction import extract_text_from_file, has_extractable_text
+from screening.common.ocr import ocr_available
+from screening.common.text_extraction import (
+    TextExtractionError,
+    extract_text_from_file,
+    has_extractable_text,
+)
 
-# Step 1 — extension whitelist. PDF and DOCX only; no images, no scans, no OCR in v1.
-ALLOWED_EXTENSIONS = {"pdf", "docx"}
+# Step 1 — extension whitelist. PDF, DOCX, and the image formats a scanner or a phone
+# produces: extraction OCRs anything without a text layer, so a scanned CV is now an
+# ordinary input rather than a rejection.
+ALLOWED_EXTENSIONS = {"pdf", "docx", "png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp"}
 
 # Step 2 — what the file must actually BE, by magic bytes, regardless of its name.
+# Several MIME strings per image type on purpose: libmagic's answer for the same
+# bytes differs by version and platform (BMP is the usual offender).
 ALLOWED_MIME_TYPES = {
     "pdf": {"application/pdf"},
     "docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+    "png": {"image/png"},
+    "jpg": {"image/jpeg"},
+    "jpeg": {"image/jpeg"},
+    "tif": {"image/tiff"},
+    "tiff": {"image/tiff"},
+    "bmp": {"image/bmp", "image/x-ms-bmp", "image/x-bmp"},
+    "webp": {"image/webp"},
 }
 
 # Step 3 — size limits. Starting values, tune against real HR batches:
@@ -31,11 +47,14 @@ ALLOWED_MIME_TYPES = {
 #        well under 1 KB. Judging whether a file holds enough *content* is step 4's
 #        job (has_extractable_text, 50 chars) — duplicating that judgement here just
 #        produces a misleading rejection reason ("too small" for a readable file).
-#   max  a CV over 10 MB is a scan or has huge images — neither is usable in v1
+#   max  raised from 10 MB when OCR arrived: a 10 MB ceiling was fine while scans were
+#        rejected on principle, but a colour scan of a three-page CV at 300 DPI lands
+#        between 10 and 20 MB routinely, and rejecting it for its size would undo the
+#        thing OCR is here to do
 #   batch guards against one upload filling the disk
 MIN_FILE_BYTES = 100
-MAX_FILE_BYTES = 10 * 1024 * 1024
-MAX_BATCH_BYTES = 100 * 1024 * 1024
+MAX_FILE_BYTES = 25 * 1024 * 1024
+MAX_BATCH_BYTES = 200 * 1024 * 1024
 
 _HASH_CHUNK_BYTES = 65536
 
@@ -57,7 +76,10 @@ def check_extension(filename: str) -> str:
     """Step 1. Returns the lowercase extension so later steps don't re-parse it."""
     ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     if ext not in ALLOWED_EXTENSIONS:
-        raise CVValidationError(f"unsupported file type: .{ext or 'none'} (only .pdf and .docx are accepted)")
+        accepted = ", ".join("." + e for e in sorted(ALLOWED_EXTENSIONS))
+        raise CVValidationError(
+            f"unsupported file type: .{ext or 'none'} (accepted: {accepted})"
+        )
     return ext
 
 
@@ -111,15 +133,32 @@ def validate_cv_file(file_path: str, original_filename: str, seen_hashes=()) -> 
     check_magic_type(file_path, ext)
     size_bytes = check_file_size(file_path)
 
-    # Step 4. A corrupted PDF fails inside pymupdf with FileDataError (a RuntimeError),
+    # Step 4. A corrupted PDF fails inside the parser with FileDataError (a RuntimeError),
     # NOT a ValueError — catching only ValueError here would turn a damaged upload into
-    # a 500 error page instead of a per-file rejection.
+    # a 500 error page instead of a per-file rejection. TextExtractionError is caught by
+    # the same clause (it subclasses RuntimeError) but named separately because it
+    # carries a reason worth showing: "password-protected PDF" is actionable, the bare
+    # exception type is not.
+    #
+    # This is where OCR happens, so it is the slow step: a scanned CV costs a second or
+    # two per page here. That is deliberate — validation has to know whether a file
+    # holds readable text before the recruiter is told it was accepted.
     try:
         text = extract_text_from_file(file_path)
+    except TextExtractionError as exc:
+        raise CVValidationError(f"could not read file: {exc}") from exc
     except (ValueError, RuntimeError) as exc:
         raise CVValidationError(f"could not read file: {type(exc).__name__}") from exc
 
     if not has_extractable_text(text):
+        # The reason is the recruiter's only explanation, and "no extractable text" is
+        # misleading on a server with no Tesseract: the file may be perfectly readable
+        # and the *server* is what needs fixing. Say which it is.
+        if not ocr_available():
+            raise CVValidationError(
+                "no extractable text found (this file has no text layer and OCR is not "
+                "installed on the server)"
+            )
         raise CVValidationError("no extractable text found")
 
     file_hash = compute_file_hash(file_path)

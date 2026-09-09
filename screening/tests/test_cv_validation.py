@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from screening.common import ocr
 from screening.cv import validation
 from screening.cv.validation import (
     CVValidationError,
@@ -21,6 +22,17 @@ from screening.cv.validation import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+needs_ocr = pytest.mark.skipif(
+    not ocr.ocr_available(), reason="Tesseract is not installed on this machine"
+)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_ocr_probe():
+    """The engine probe is cached; a test that disables OCR must not leave that behind."""
+    yield
+    ocr.reset_ocr_cache()
 
 
 # --- Files that should pass all five checks ----------------------------------
@@ -87,15 +99,52 @@ def test_batch_over_the_total_limit_is_rejected():
 
 # --- Step 4: extractable text -------------------------------------------------
 
-def test_scanned_pdf_is_rejected_with_the_specified_reason():
-    """CLAUDE.md names this reason string exactly. It is v1's entire handling of
-    scanned documents — no OCR fallback."""
+def test_a_file_with_nothing_to_read_is_rejected_with_the_specified_reason():
+    """CLAUDE.md names this reason string exactly. It no longer means "a scan" — OCR
+    reads those now — it means a file with no text and nothing OCR can recognise
+    either, here a page of drawn rectangles."""
     with pytest.raises(CVValidationError, match="no extractable text found"):
         validate_cv_file(str(FIXTURES / "no_text_layer.pdf"), "no_text_layer.pdf")
 
 
+@needs_ocr
+def test_a_scanned_pdf_now_passes_validation():
+    """The rejection this project used to be defined by. A CV that exists only as a
+    picture is an ordinary input now, and comes out of validation with its text."""
+    result = validate_cv_file(str(FIXTURES / "scanned_cv.pdf"), "scanned_cv.pdf")
+
+    assert "KARIM ZAHRAOUI" in result["text"]
+    assert len(result["file_hash"]) == 64
+
+
+@needs_ocr
+@pytest.mark.parametrize("filename", ["scanned_cv.png", "table_cv.docx", "scanned_cv.docx"])
+def test_the_formats_ocr_unlocked_pass_every_check(filename):
+    """A photo of a printed CV, a CV built entirely out of a Word table, and a scan
+    pasted into Word: three files the old chain rejected at step 1 or step 4."""
+    result = validate_cv_file(str(FIXTURES / filename), filename)
+
+    assert len(result["text"]) > 50
+
+
+def test_an_image_named_as_a_pdf_is_still_caught_by_the_magic_check():
+    """Accepting images does not weaken step 2 — the bytes still have to match the name."""
+    with pytest.raises(CVValidationError, match="does not match its .pdf extension"):
+        validate_cv_file(str(FIXTURES / "scanned_cv.png"), "scanned_cv.pdf")
+
+
+def test_a_scan_on_a_server_without_ocr_says_which_thing_is_missing(monkeypatch):
+    """"No extractable text" would blame the CV for a server that is missing a package.
+    The recruiter cannot fix the file, but somebody can fix the server."""
+    monkeypatch.setattr(ocr, "OCR_ENABLED", False)
+    ocr.reset_ocr_cache()
+
+    with pytest.raises(CVValidationError, match="OCR is not installed on the server"):
+        validate_cv_file(str(FIXTURES / "scanned_cv.pdf"), "scanned_cv.pdf")
+
+
 def test_corrupted_pdf_is_rejected_not_crashed():
-    """A damaged PDF raises FileDataError (a RuntimeError) deep inside pymupdf.
+    """A damaged PDF raises TextExtractionError (a RuntimeError) out of extraction.
 
     This test is the reason validate_cv_file catches RuntimeError as well as
     ValueError: without it, one corrupt upload becomes a 500 error page and takes

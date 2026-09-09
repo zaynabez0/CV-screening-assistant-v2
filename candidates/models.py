@@ -6,6 +6,11 @@ class Candidate(models.Model):
 
     `extracted_json` is the CV_SCHEMA output. Once it is set, every downstream stage
     reads it (anonymized) and never touches the raw file again.
+
+    `extracted_text` is what upload validation read out of the file. It is stored
+    rather than re-derived because extraction now runs OCR: re-reading a scanned CV
+    at structuring time would repeat seconds of Tesseract work per page for a result
+    that cannot have changed — the file is immutable once uploaded.
     """
 
     STATUS_CHOICES = [
@@ -20,6 +25,7 @@ class Candidate(models.Model):
     file_hash = models.CharField(max_length=64, db_index=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     rejection_reason = models.TextField(blank=True)
+    extracted_text = models.TextField(blank=True)  # what validation read; reused by structuring
     extracted_json = models.JSONField(null=True, blank=True)  # CV_SCHEMA output, once structured
     uploaded_at = models.DateTimeField(auto_now_add=True)
     run = models.ForeignKey("runs.ScreeningRun", on_delete=models.CASCADE)
