@@ -12,3 +12,8 @@ API_test*.py
 # Django
 *.sqlite3
 media/
+
+# Real CVs used for manual testing. Put them HERE, never in
+# screening/tests/fixtures/ — that folder is committed, and a real CV in Git
+# history is personal data that cannot be taken back out.
+samples/

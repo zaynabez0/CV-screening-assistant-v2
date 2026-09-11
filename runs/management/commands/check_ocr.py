@@ -7,6 +7,8 @@ scans come back empty. That reads as "the tool rejected this CV" rather than
 out on a batch of fifty.
 """
 
+from pathlib import Path
+
 from django.core.management.base import BaseCommand
 
 from screening.common import ocr
@@ -19,6 +21,15 @@ class Command(BaseCommand):
         parser.add_argument(
             "file", nargs="?",
             help="Optionally, a PDF/DOCX/image to run extraction against as a live check.",
+        )
+        parser.add_argument(
+            "--full", action="store_true",
+            help="Print the whole extracted text instead of the first 12 lines.",
+        )
+        parser.add_argument(
+            "--out", metavar="PATH",
+            help="Write the extracted text to a UTF-8 file. This is what the LLM would "
+                 "be sent, so it is the thing to read when a CV structures badly.",
         )
 
     def handle(self, *args, **options):
@@ -66,6 +77,19 @@ class Command(BaseCommand):
             "too little text — this file would be rejected at upload"
         )
         self.stdout.write(f"  {len(text)} characters — {verdict}")
-        preview = "\n  ".join(text.splitlines()[:12])
-        if preview:
-            self.stdout.write(f"\n  {preview}")
+
+        if options.get("out"):
+            # UTF-8 explicitly: a Windows console defaults to cp1252 and drops the very
+            # accented characters this file is most likely being inspected for.
+            Path(options["out"]).write_text(text, encoding="utf-8")
+            self.stdout.write(self.style.SUCCESS(f"  written to {options['out']}"))
+
+        lines = text.splitlines()
+        shown = lines if options.get("full") else lines[:12]
+        if shown:
+            self.stdout.write("\n  " + "\n  ".join(shown))
+        if len(shown) < len(lines):
+            self.stdout.write(self.style.WARNING(
+                f"\n  … {len(lines) - len(shown)} more line(s). Use --full to print all of "
+                f"it, or --out extracted.txt to read it in an editor."
+            ))
