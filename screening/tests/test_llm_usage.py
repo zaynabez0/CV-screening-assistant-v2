@@ -23,7 +23,7 @@ MODEL = "recorded-model-id"
 @pytest.fixture(autouse=True)
 def pinned_model(monkeypatch):
     """The recorded model id is whatever the environment says, so pin it here rather
-    than let a real OPENAI_MODEL in the shell or .env decide what this asserts."""
+    than let a real MODEL in the shell or .env decide what this asserts."""
     monkeypatch.setenv(MODEL_ENV_VAR, MODEL)
 
 

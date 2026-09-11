@@ -155,25 +155,25 @@ no aliases, four lines:
 | Variable | Required | What it is |
 |---|---|---|
 | `KEY_REGULATOR_API_KEY` | **yes** | The API key, whether it is a plain OpenAI key or a gateway-issued sub-key. |
-| `OPENAI_MODEL` | **yes** | The id of the model to call, spelled exactly as your provider or gateway exposes it. |
-| `OPENAI_BASE_URL` | no | Your gateway's endpoint. Leave it blank to call `api.openai.com` directly. |
+| `MODEL` | **yes** | The id of the model to call, spelled exactly as your provider or gateway exposes it. |
+| `BASE_URL` | no | Your gateway's endpoint. Leave it blank to call `api.openai.com` directly. |
 | `TESSERACT_CMD` | no | Full path to the Tesseract binary, when it is installed but not on `PATH`. See [§1](#1-prerequisites). |
 
-**`OPENAI_MODEL` has no default, on purpose.** Which model this project runs on is a
+**`MODEL` has no default, on purpose.** Which model this project runs on is a
 deployment decision — and a gateway commonly fronts a model under an id of its own — so
 it is declared here rather than guessed in code. Leaving it blank fails at once, naming
 the variable, instead of failing at the first API call, once per candidate, halfway
 through a run.
 
 Blank counts as unset for all of these, which is why the template ships with every line
-present and empty: `OPENAI_BASE_URL=` means "no gateway", not "an empty address". Values
+present and empty: `BASE_URL=` means "no gateway", not "an empty address". Values
 are stripped, so a trailing space picked up while copy-pasting a key does no harm.
 
 A real environment variable always wins over `.env`, so you can override any of these for
 a single command:
 
 ```bash
-OPENAI_MODEL=some-other-model python manage.py runserver
+MODEL=some-other-model python manage.py runserver
 ```
 
 ### Check what the app will actually use
@@ -185,7 +185,7 @@ python -c "from screening.common.llm import get_client, get_model; c = get_clien
 ```
 
 If the key prints, `.env` is being read. If `endpoint` isn't what you expect, your
-`OPENAI_BASE_URL` isn't reaching the app. If you get
+`BASE_URL` isn't reaching the app. If you get
 `ModuleNotFoundError: No module named 'screening'`, you are not in the project root —
 `.env` is found relative to the code, but `screening` is imported relative to where you
 started Python.
@@ -447,9 +447,9 @@ web server, and it is enforced by a check in the test suite.
 | Uploading a batch of scans is slow | Expected: OCR runs at upload, a second or two per page, because validation has to know whether the file holds readable text before it says the CV was accepted. It is not repeated at structuring — the text is stored on the candidate. |
 | A scan comes back as gibberish | It is probably sideways and the orientation check could not tell. Try a higher `OCR_DPI`, or `OCR_CONFIG=--psm 4` for a columned layout. |
 | `KEY_REGULATOR_API_KEY is not set, so ...` | Check `.env` exists in the project root and that the key line is filled in. A line that is present but empty counts as unset. |
-| `OPENAI_MODEL is not set, so there is no model to call` | Same file, same rule — there is no default model, so this line must name one. |
-| `404` or "model not found" from a gateway | Usually the **model id**, not the key. Gateways often rename models — set `OPENAI_MODEL` to whatever yours exposes. |
-| Connection errors on any step | These are all LLM calls now. Check `OPENAI_BASE_URL` points at your gateway; run the check snippet in [§3](#3-configure-the-llm). |
+| `MODEL is not set, so there is no model to call` | Same file, same rule — there is no default model, so this line must name one. |
+| `404` or "model not found" from a gateway | Usually the **model id**, not the key. Gateways often rename models — set `MODEL` to whatever yours exposes. |
+| Connection errors on any step | These are all LLM calls now. Check `BASE_URL` points at your gateway; run the check snippet in [§3](#3-configure-the-llm). |
 | Upload page says the run is at the wrong stage | Confirm the job description first — that is what moves the run to `cv_pending`. |
 | "The job description's requirements have not been confirmed yet" | Press **Confirm requirements and continue** on the JD review page. |
 | Stage 2 is slow | It makes one API call per surviving candidate. Watch the progress bar — it advances once per call. |

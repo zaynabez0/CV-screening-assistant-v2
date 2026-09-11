@@ -1,29 +1,18 @@
-"""The one LLM call helper. Every LLM-calling stage uses it.
+"""The one LLM call helper.
 
-JD extraction, CV structuring, Stage 1, Stage 2 and Stage 3 all go through
-`call_structured` instead of five slightly different implementations.
+JD extraction, CV structuring and Stages 1, 2 and 3 all call `call_structured` rather
+than each building their own request.
 
-Configuration comes from the environment only — never Django settings, because this
-package must stay importable with zero Django imports. The project's `.env` is loaded
-here as well as in config/settings.py, so a plain `python some_script.py` that never
-touches Django still finds the settings without exporting them in the shell first.
-
-Three variables, one name each. They are spelled exactly the same way in `.env.example`,
-which is the full list of what this project reads:
+Settings come from the environment, never from Django settings, because this package
+must stay importable without Django. `.env` is loaded here as well as in
+config/settings.py, so the web server, the stage subprocesses, the tests and a plain
+`python some_script.py` all see the same values.
 
     KEY_REGULATOR_API_KEY   the API key. Required.
-    OPENAI_MODEL            the id of the model to call. Required.
-    OPENAI_BASE_URL         a gateway endpoint instead of api.openai.com. Optional.
+    MODEL                   the id of the model to call. Required.
+    BASE_URL                a gateway endpoint instead of api.openai.com. Optional.
 
-Prompt caching: OpenAI's Responses API caches long repeated prompt prefixes
-automatically. Callers get that for free by putting the shared/reused part of the
-prompt in `instructions` and the per-call unique part in `input_text` — which is
-exactly what the two arguments are for.
-
-Cost and latency: every call is timed and its token usage read off the response, and
-both are reported to whatever `collect_usage()` block is active. That is a *reporting*
-channel, not a storage one — this package cannot touch the database, so the Django side
-(`runs/usage.py`) opens the block and persists what comes out.
+`.env.example` lists exactly these, and nothing else.
 """
 
 import json
@@ -37,56 +26,39 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# Load the project's .env at import, so every entry point is configured the same way:
-# the Django server, the stage subprocesses, pytest, and a bare script run by hand.
-# Two deliberate choices:
-#   * the path is explicit rather than dotenv's search-upwards default, which resolves
-#     relative to *this file* and would quietly pick up a stray .env in some parent
-#     directory if the package were ever installed elsewhere;
-#   * load_dotenv does not overwrite variables that are already set, so a real shell
-#     variable still wins over .env — the override documented in the README.
-# A missing .env is not an error: on a machine configured with real environment
-# variables there is nothing to load.
+# An explicit path rather than dotenv's search-upwards default, which would resolve
+# relative to this file and could pick up a stray .env in some parent directory.
+# Nothing to load is fine: a server may be configured with real environment variables.
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 
-# One environment variable per setting, and no aliases: what `.env.example` lists is
-# the whole contract. A second accepted name for the same setting is a silent override
-# waiting to happen — a leftover variable in someone's shell beating the .env they are
-# looking at while they debug.
+# One name per setting. A second accepted spelling is a silent override waiting to
+# happen, with a leftover shell variable beating the .env someone is reading.
 API_KEY_ENV_VAR = "KEY_REGULATOR_API_KEY"
-MODEL_ENV_VAR = "OPENAI_MODEL"
-BASE_URL_ENV_VAR = "OPENAI_BASE_URL"
+MODEL_ENV_VAR = "MODEL"
+BASE_URL_ENV_VAR = "BASE_URL"
 
-# Mirrors the SDK's own default endpoint, and we always pass it explicitly. Reason:
-# if the base URL is set but *blank* — `OPENAI_BASE_URL=` in a .env, which is exactly
-# how the template ships — the SDK resolves base_url to the empty string and never falls
-# back to its default, whether you omit the argument or pass None. Every request then
-# goes nowhere with a confusing error. Passing a concrete URL is the only way out.
-# (This also overrides the SDK's mTLS/data-residency default, which this project does
-# not configure.)
+# The SDK's own default, which we always pass explicitly. If base_url is set but blank
+# the SDK uses the empty string instead of falling back, and every request goes nowhere
+# with a confusing error. Passing a real URL is the only way to avoid that.
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
 _client = None
 
 
 def _env(name: str) -> str | None:
-    """The value of `name`, or None when it is unset, empty or whitespace only.
+    """The value of `name`, or None if it is unset, empty or only whitespace.
 
-    Blank counts as unset for all three settings. `.env.example` ships every line
-    present and empty, so "filled in" has to mean more than "the line exists" —
-    and a copy-pasted value often arrives with a trailing space attached.
+    `.env.example` ships every line present and empty, so a blank value means the
+    template was copied and not filled in. Whitespace is stripped, because a value
+    pasted into a .env often arrives with a trailing space.
     """
     value = (os.environ.get(name) or "").strip()
     return value or None
 
 
 def _require_env(name: str, consequence: str) -> str:
-    """`_env`, but a missing value is a startup error naming the variable to fill in.
-
-    The SDK's own version of this ("Missing credentials…") names OPENAI_API_KEY, which
-    this project does not read — so it sends people looking for the wrong variable.
-    """
+    """Like `_env`, but a missing value is an error naming the variable to fill in."""
     value = _env(name)
     if value is None:
         raise RuntimeError(
@@ -97,17 +69,16 @@ def _require_env(name: str, consequence: str) -> str:
 
 
 def get_base_url() -> str:
-    """The endpoint to call: the gateway named by OPENAI_BASE_URL, or OpenAI's own."""
+    """The gateway endpoint, or OpenAI's own when no gateway is configured."""
     return _env(BASE_URL_ENV_VAR) or DEFAULT_BASE_URL
 
 
 def get_model() -> str:
-    """The model id to call, from OPENAI_MODEL.
+    """The id of the model to call.
 
-    Deliberately has no default. Which model this project runs on is a deployment
-    decision — and a gateway commonly fronts a model under an id of its own — so it is
-    declared once in `.env` rather than guessed here. A wrong default would be worse
-    than a missing one: it fails at the first API call, per candidate, mid-run.
+    No default: which model to run is a deployment decision, and a gateway often
+    exposes a model under an id of its own. Unset fails here rather than at the first
+    API call, once per candidate, in the middle of a run.
     """
     return _require_env(MODEL_ENV_VAR, "there is no model to call")
 
@@ -117,23 +88,19 @@ def _resolve_api_key() -> str:
 
 
 def get_client() -> OpenAI:
-    """Build the client on first use, not at import time.
+    """The shared client, built on first use and reused afterwards.
 
-    A module-level `OpenAI()` would raise at *import* whenever no key is set, which
-    would break `manage.py check`, the test suite, and a fresh checkout before anyone
-    has a key. Built once on the first call and reused for every call after that.
+    Not built at import, which would make importing this module fail whenever no key
+    is set and break `manage.py check`, the tests and a fresh checkout.
     """
     global _client
     if _client is None:
-        _client = OpenAI(
-            api_key=_resolve_api_key(),  # read from the environment — never hardcode the key
-            base_url=get_base_url(),
-        )
+        _client = OpenAI(api_key=_resolve_api_key(), base_url=get_base_url())
     return _client
 
 
 def reset_client() -> None:
-    """Drop the cached client so a changed environment takes effect on the next call."""
+    """Drop the cached client so a changed environment applies to the next call."""
     global _client
     _client = None
 
@@ -142,14 +109,12 @@ def reset_client() -> None:
 class CallUsage:
     """What one `call_structured` cost, in tokens and wall-clock time.
 
-    `schema_name` identifies which step made the call: the five call sites each pass a
-    distinct one ("jd_requirements", "candidate_data", "hard_filter_result",
-    "candidate_match", "candidate_scores"), so it doubles as the label telling recorded
-    calls apart without anything extra being threaded through the screening layer.
+    `schema_name` says which step made the call: the five call sites each pass their
+    own, so it doubles as a label.
 
-    Two subtleties that matter when pricing this, both of them subsets rather than extras:
-    `cached_input_tokens` is part of `input_tokens`, not additional to it, and
-    `reasoning_tokens` is part of `output_tokens`. Bill accordingly.
+    Both cached and reasoning counts are subsets, not extras: `cached_input_tokens` is
+    part of `input_tokens`, and `reasoning_tokens` is part of `output_tokens`. Price
+    them accordingly.
     """
 
     schema_name: str
@@ -161,9 +126,8 @@ class CallUsage:
     duration_ms: int
 
 
-# Thread-local, not a plain module global: the dev server handles requests in threads,
-# and two recruiters structuring CVs at once must not have their calls land in each
-# other's tally.
+# Thread-local rather than a plain global: the dev server handles requests in threads,
+# and two recruiters working at once must not land in each other's tally.
 _active = threading.local()
 
 
@@ -171,9 +135,9 @@ _active = threading.local()
 def collect_usage():
     """Collect a CallUsage for every `call_structured` made inside this block.
 
-    Yields the list, which is filled as the calls happen — so a caller that wraps this in
-    its own `finally` still sees the calls that completed before an exception. Blocks
-    nest: an inner block takes over, and the outer one resumes when it exits.
+    The list is yielded straight away and filled as the calls happen, so a caller that
+    handles its own exceptions still sees the calls that completed. Blocks nest: an
+    inner block takes over, and the outer one resumes when it exits.
     """
     previous = getattr(_active, "sink", None)
     sink: list[CallUsage] = []
@@ -185,12 +149,11 @@ def collect_usage():
 
 
 def _token_count(node, *path) -> int:
-    """Walk `path` off the response and return an int, or 0 if anything is missing.
+    """Follow `path` down the response and return an int, or 0 if anything is missing.
 
-    Defensive on purpose: a gateway may omit `usage` entirely, and a token count is not
-    worth failing a run over. The isinstance check carries its own weight in the tests,
-    where the client is stubbed with a bare `MagicMock` that answers every attribute
-    with another mock rather than raising — without it, a mock is stored as a count.
+    A gateway may leave `usage` out entirely, and a token count is not worth failing a
+    run over. The isinstance check also keeps a stubbed client's mock attributes from
+    being stored as counts.
     """
     for key in path:
         node = getattr(node, key, None)
@@ -198,12 +161,14 @@ def _token_count(node, *path) -> int:
 
 
 def call_structured(instructions: str, input_text: str, schema_name: str, schema: dict) -> dict:
-    """instructions: the shared/reused part of the prompt (put first, so it's the
-    cached prefix). input_text: the per-call unique part (e.g. one candidate).
+    """One LLM call, returning the parsed JSON response.
 
-    Returns the parsed response. Usage and latency go to the active `collect_usage()`
-    block, if any — deliberately a side channel rather than a second return value, so
-    every caller stays as it was.
+    Put the part of the prompt that repeats across calls in `instructions` and the part
+    that changes in `input_text`. The API caches repeated prefixes automatically, so
+    splitting them this way makes every call after the first one cheaper.
+
+    Token usage and timing go to the active `collect_usage()` block, if there is one.
+    That is a side channel rather than a second return value, so callers are unaffected.
     """
     model = get_model()
     started = time.perf_counter()
