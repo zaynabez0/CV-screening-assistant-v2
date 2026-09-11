@@ -35,8 +35,8 @@ def extract_requirements(jd_text: str) -> list[dict]:
 def normalize_requirement(item: dict) -> dict:
     """Apply the must_have rule to a single requirement.
 
-    CLAUDE.md: must_have items carry scale "" and suggested_weight 0 — both are unused
-    for that type. Applied whenever the recruiter changes a row's type at the review
+    A must_have item carries scale "" and suggested_weight 0 — both are unused for that
+    type. Applied whenever the recruiter changes a row's type at the review
     checkpoint, so a requirement switched to must_have does not keep a stale scale that
     Stage 3 would then silently ignore.
     """

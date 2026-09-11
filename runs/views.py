@@ -323,7 +323,8 @@ def stage3_review(request, run_id):
     rubric = build_rubric(run.job_description.requirements)
     weighted = apply_user_weights(rubric, run.rubric_weights or {}) if rubric else []
 
-    # Surface the normalization CLAUDE.md asks to be "surfaced to the user".
+    # Weights are normalized to sum to 1. Surfaced rather than applied silently: a
+    # recruiter who typed the numbers is entitled to see that they were adjusted.
     raw_total = sum(
         (run.rubric_weights or {}).get(c["requirement"], c["suggested_weight"]) for c in rubric
     )

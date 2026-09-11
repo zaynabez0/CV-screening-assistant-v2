@@ -1,4 +1,7 @@
-"""Upload validation for CV files — the five checks, run in CLAUDE.md's order.
+"""Upload validation for CV files — five checks, run in a fixed order.
+
+The order is load-bearing: a rejection must name the earliest thing wrong with a file,
+not a downstream symptom of it. See the checks below, and test_cv_validation.py.
 
 Pure Python: no Django, no database. The dedup check (step 5) needs to know which
 hashes already exist for the run, so the caller passes them in — that keeps the

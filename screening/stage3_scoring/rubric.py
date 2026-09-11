@@ -18,10 +18,10 @@ def apply_user_weights(rubric: list, user_weights: dict) -> list:
     updated = [{**c, "weight": user_weights.get(c["requirement"], c["suggested_weight"])} for c in rubric]
     total = sum(c["weight"] for c in updated)
 
-    # Guard beyond CLAUDE.md: the weight-adjustment checkpoint lets a recruiter type a
-    # weight per criterion, so setting every one to zero is one keystroke away — and
-    # CLAUDE.md's `c["weight"] / total` is a ZeroDivisionError at that point. Equal
-    # weights keep the stage runnable; the view tells the user it happened.
+    # The weight-adjustment checkpoint lets a recruiter type a weight per criterion, so
+    # setting every one to zero is one keystroke away — and a plain `c["weight"] / total`
+    # is a ZeroDivisionError at that point. Equal weights keep the stage runnable; the
+    # view tells the user it happened.
     if total <= 0:
         equal = 1 / len(updated) if updated else 0
         return [{**c, "weight": equal} for c in updated]

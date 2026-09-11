@@ -1,18 +1,19 @@
 """The one LLM call helper. Every LLM-calling stage uses it.
 
-JD extraction, CV structuring, Stage 1 and Stage 3 all go through `call_structured`
-instead of four slightly different implementations.
+JD extraction, CV structuring, Stage 1, Stage 2 and Stage 3 all go through
+`call_structured` instead of five slightly different implementations.
 
 Configuration comes from the environment only — never Django settings, because this
 package must stay importable with zero Django imports. The project's `.env` is loaded
 here as well as in config/settings.py, so a plain `python some_script.py` that never
-touches Django still finds the key without exporting it in the shell first:
+touches Django still finds the settings without exporting them in the shell first.
 
-    OPENAI_API_KEY          the standard name. Checked first.
-    KEY_REGULATOR_API_KEY   alternative name, for a gateway-issued sub-key.
+Three variables, one name each. They are spelled exactly the same way in `.env.example`,
+which is the full list of what this project reads:
+
+    KEY_REGULATOR_API_KEY   the API key. Required.
+    OPENAI_MODEL            the id of the model to call. Required.
     OPENAI_BASE_URL         a gateway endpoint instead of api.openai.com. Optional.
-    OPENAI_MODEL            override the model id. Optional — a gateway may expose the
-                            same model under a different name.
 
 Prompt caching: OpenAI's Responses API caches long repeated prompt prefixes
 automatically. Callers get that for free by putting the shared/reused part of the
@@ -22,8 +23,7 @@ exactly what the two arguments are for.
 Cost and latency: every call is timed and its token usage read off the response, and
 both are reported to whatever `collect_usage()` block is active. That is a *reporting*
 channel, not a storage one — this package cannot touch the database, so the Django side
-(`runs/usage.py`) opens the block and persists what comes out. `call_structured`'s
-return value is unchanged, which is why none of the code or tests around it had to move.
+(`runs/usage.py`) opens the block and persists what comes out.
 """
 
 import json
@@ -50,78 +50,78 @@ from openai import OpenAI
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 
-DEFAULT_MODEL = "gpt-5.6-luna"
+# One environment variable per setting, and no aliases: what `.env.example` lists is
+# the whole contract. A second accepted name for the same setting is a silent override
+# waiting to happen — a leftover variable in someone's shell beating the .env they are
+# looking at while they debug.
+API_KEY_ENV_VAR = "KEY_REGULATOR_API_KEY"
+MODEL_ENV_VAR = "OPENAI_MODEL"
+BASE_URL_ENV_VAR = "OPENAI_BASE_URL"
 
 # Mirrors the SDK's own default endpoint, and we always pass it explicitly. Reason:
-# if the base URL is set but *blank* — `OPENAI_BASE_URL=` in a .env, easy to do when
-# uncommenting the line — the SDK resolves base_url to the empty string and never falls
+# if the base URL is set but *blank* — `OPENAI_BASE_URL=` in a .env, which is exactly
+# how the template ships — the SDK resolves base_url to the empty string and never falls
 # back to its default, whether you omit the argument or pass None. Every request then
 # goes nowhere with a confusing error. Passing a concrete URL is the only way out.
 # (This also overrides the SDK's mTLS/data-residency default, which this project does
 # not configure.)
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
-# Checked in order. OPENAI_API_KEY first so the standard name always wins; the second
-# exists for deployments whose key is issued by a gateway under its own variable name.
-API_KEY_ENV_VARS = ("OPENAI_API_KEY", "KEY_REGULATOR_API_KEY")
-
-# Same order rule for the endpoint: the SDK's own name first, then the bare name that
-# gateway instructions often pair with a sub-key (KEY_REGULATOR_API_KEY + BASE_URL).
-# Both are optional — with neither set we talk to api.openai.com directly.
-BASE_URL_ENV_VARS = ("OPENAI_BASE_URL", "BASE_URL")
-
 _client = None
 
 
-def get_base_url() -> str:
-    """The endpoint to call: a gateway if one is configured, otherwise OpenAI's.
+def _env(name: str) -> str | None:
+    """The value of `name`, or None when it is unset, empty or whitespace only.
 
-    A blank or whitespace-only value counts as unset and falls through to the next
-    name, so a leftover `OPENAI_BASE_URL=` in a .env can't shadow a filled-in BASE_URL.
+    Blank counts as unset for all three settings. `.env.example` ships every line
+    present and empty, so "filled in" has to mean more than "the line exists" —
+    and a copy-pasted value often arrives with a trailing space attached.
     """
-    for name in BASE_URL_ENV_VARS:
-        value = (os.environ.get(name) or "").strip()
-        if value:
-            return value
-    return DEFAULT_BASE_URL
+    value = (os.environ.get(name) or "").strip()
+    return value or None
+
+
+def _require_env(name: str, consequence: str) -> str:
+    """`_env`, but a missing value is a startup error naming the variable to fill in.
+
+    The SDK's own version of this ("Missing credentials…") names OPENAI_API_KEY, which
+    this project does not read — so it sends people looking for the wrong variable.
+    """
+    value = _env(name)
+    if value is None:
+        raise RuntimeError(
+            f"{name} is not set, so {consequence}. "
+            f"Copy .env.example to .env and fill in {name}."
+        )
+    return value
+
+
+def get_base_url() -> str:
+    """The endpoint to call: the gateway named by OPENAI_BASE_URL, or OpenAI's own."""
+    return _env(BASE_URL_ENV_VAR) or DEFAULT_BASE_URL
 
 
 def get_model() -> str:
-    """The model id to call.
+    """The model id to call, from OPENAI_MODEL.
 
-    A gateway often fronts the same model under a different id, so this is overridable
-    without editing code. Defaults to CLAUDE.md's `gpt-5.6-luna`.
+    Deliberately has no default. Which model this project runs on is a deployment
+    decision — and a gateway commonly fronts a model under an id of its own — so it is
+    declared once in `.env` rather than guessed here. A wrong default would be worse
+    than a missing one: it fails at the first API call, per candidate, mid-run.
     """
-    return os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL
+    return _require_env(MODEL_ENV_VAR, "there is no model to call")
 
 
 def _resolve_api_key() -> str:
-    """First key found among API_KEY_ENV_VARS.
-
-    Raises with the accepted names spelled out: the generic SDK error ("Missing
-    credentials…") sends people looking for OPENAI_API_KEY when this project may be
-    configured with the other one.
-    """
-    for name in API_KEY_ENV_VARS:
-        value = os.environ.get(name)
-        if value:
-            return value
-    raise RuntimeError(
-        "No LLM API key found in the environment. Set one of: "
-        + ", ".join(API_KEY_ENV_VARS)
-        + ". If you use a gateway rather than api.openai.com, also set one of: "
-        + ", ".join(BASE_URL_ENV_VARS)
-        + "."
-    )
+    return _require_env(API_KEY_ENV_VAR, "there is no API key to authenticate with")
 
 
 def get_client() -> OpenAI:
     """Build the client on first use, not at import time.
 
-    Deviation from CLAUDE.md, which shows a module-level `client = OpenAI()`: that
-    raises at *import* when no key is set, which would break `manage.py check`, the
-    test suite, and a fresh checkout before anyone has a key. Built once on the first
-    call and reused for every call after that.
+    A module-level `OpenAI()` would raise at *import* whenever no key is set, which
+    would break `manage.py check`, the test suite, and a fresh checkout before anyone
+    has a key. Built once on the first call and reused for every call after that.
     """
     global _client
     if _client is None:
@@ -142,10 +142,10 @@ def reset_client() -> None:
 class CallUsage:
     """What one `call_structured` cost, in tokens and wall-clock time.
 
-    `schema_name` identifies which step made the call — the five call sites already pass
-    a distinct one ("jd_requirements", "candidate_data", "hard_filter_result",
-    "candidate_match", "candidate_scores"), so nothing extra had to be threaded through
-    the screening layer to tell them apart.
+    `schema_name` identifies which step made the call: the five call sites each pass a
+    distinct one ("jd_requirements", "candidate_data", "hard_filter_result",
+    "candidate_match", "candidate_scores"), so it doubles as the label telling recorded
+    calls apart without anything extra being threaded through the screening layer.
 
     Two subtleties that matter when pricing this, both of them subsets rather than extras:
     `cached_input_tokens` is part of `input_tokens`, not additional to it, and
@@ -187,10 +187,10 @@ def collect_usage():
 def _token_count(node, *path) -> int:
     """Walk `path` off the response and return an int, or 0 if anything is missing.
 
-    Defensive on purpose. A gateway may omit `usage` entirely, and — the reason this is
-    not merely theoretical — the client is stubbed with a bare `MagicMock` in
-    test_llm_client.py, which answers every attribute with another mock rather than
-    raising. The isinstance check is what stops a mock being stored as a token count.
+    Defensive on purpose: a gateway may omit `usage` entirely, and a token count is not
+    worth failing a run over. The isinstance check carries its own weight in the tests,
+    where the client is stubbed with a bare `MagicMock` that answers every attribute
+    with another mock rather than raising — without it, a mock is stored as a count.
     """
     for key in path:
         node = getattr(node, key, None)

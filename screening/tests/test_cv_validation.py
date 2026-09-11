@@ -1,6 +1,6 @@
 """Tests for the CV upload validation chain (screening/cv/validation.py).
 
-The five checks run in CLAUDE.md's order, and the order is itself load-bearing: a
+The five checks run in a fixed order, and the order is itself load-bearing: a
 rejection reason must name the earliest thing wrong with a file, not a downstream
 symptom. `test_extension_is_checked_before_content` pins that.
 """
@@ -100,9 +100,9 @@ def test_batch_over_the_total_limit_is_rejected():
 # --- Step 4: extractable text -------------------------------------------------
 
 def test_a_file_with_nothing_to_read_is_rejected_with_the_specified_reason():
-    """CLAUDE.md names this reason string exactly. It no longer means "a scan" — OCR
-    reads those now — it means a file with no text and nothing OCR can recognise
-    either, here a page of drawn rectangles."""
+    """This exact reason string is shown to the recruiter and asserted on elsewhere.
+    It no longer means "a scan" — OCR reads those now — it means a file with no text and
+    nothing OCR can recognise either, here a page of drawn rectangles."""
     with pytest.raises(CVValidationError, match="no extractable text found"):
         validate_cv_file(str(FIXTURES / "no_text_layer.pdf"), "no_text_layer.pdf")
 

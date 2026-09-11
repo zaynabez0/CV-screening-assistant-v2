@@ -153,8 +153,7 @@ class Override(models.Model):
     run = models.ForeignKey("runs.ScreeningRun", on_delete=models.CASCADE)
     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
     reason = models.TextField()
-    # Added beyond CLAUDE.md's model: "adjust_score" has no value to apply without it.
-    # Null for the other two actions.
+    # "adjust_score" has no value to apply without this. Null for the other two actions.
     adjusted_score = models.FloatField(null=True, blank=True)
     performed_by = models.ForeignKey("auth.User", on_delete=models.PROTECT)
     created_at = models.DateTimeField(auto_now_add=True)

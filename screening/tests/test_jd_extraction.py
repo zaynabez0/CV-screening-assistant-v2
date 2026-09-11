@@ -130,7 +130,7 @@ def test_an_empty_extraction_is_returned_as_an_empty_list():
 # --- normalize_requirement: the must_have rule ----------------------------------
 
 def test_must_have_loses_its_scale_and_weight():
-    """CLAUDE.md: must_have carries scale "" and suggested_weight 0 — both unused.
+    """A must_have carries scale "" and suggested_weight 0 — both unused for that type.
     Without this, a requirement switched to must_have keeps a stale scale that
     Stage 3 silently ignores."""
     result = normalize_requirement({

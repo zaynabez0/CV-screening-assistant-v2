@@ -9,11 +9,11 @@ which is what makes a Stage 3 result auditable.
 def aggregate_score(criterion_scores: list, weighted_rubric: list) -> dict:
     weight_map = {r["requirement"]: r["weight"] for r in weighted_rubric}
 
-    # Guard beyond CLAUDE.md: SCORE_SCHEMA types `criterion` as a free-text string, so
-    # nothing stops the model returning a reworded or invented criterion name.
-    # CLAUDE.md's weight_map[cs["criterion"]] raises KeyError there and kills the whole
-    # run over one bad response. Unrecognised names are excluded from the arithmetic and
-    # reported instead, so the score stays computable and the anomaly stays visible.
+    # SCORE_SCHEMA types `criterion` as a free-text string, so nothing stops the model
+    # returning a reworded or invented criterion name. A direct weight_map[cs["criterion"]]
+    # lookup raises KeyError there and kills the whole run over one bad response.
+    # Unrecognised names are excluded from the arithmetic and reported instead, so the
+    # score stays computable and the anomaly stays visible.
     returned = {cs["criterion"] for cs in criterion_scores}
     scored = [cs for cs in criterion_scores if cs["criterion"] in weight_map]
     unknown = [cs["criterion"] for cs in criterion_scores if cs["criterion"] not in weight_map]

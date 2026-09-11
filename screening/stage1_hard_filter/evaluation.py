@@ -19,8 +19,7 @@ def evaluate_hard_filters(anon_candidate: dict, must_have_requirements: list[dic
     # A JD with no must-have requirements has no hard gate, so everyone passes. Guarding
     # here rather than calling the LLM with an empty list: `all([])` is True either way,
     # but an empty requirement list invites the model to invent requirements to evaluate,
-    # and it would be a wasted API call per candidate. Deviation from CLAUDE.md, which
-    # does not cover this case for Stage 1 (it does cover the equivalent for Stage 3).
+    # and it would be a wasted API call per candidate.
     if not must_have_requirements:
         return {"passed": True, "evaluations": []}
 

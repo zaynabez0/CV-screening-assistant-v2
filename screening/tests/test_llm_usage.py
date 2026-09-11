@@ -13,15 +13,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from screening.common import llm
-from screening.common.llm import DEFAULT_MODEL, call_structured, collect_usage
+from screening.common.llm import MODEL_ENV_VAR, call_structured, collect_usage
 
 SCHEMA = {"type": "object", "additionalProperties": False, "properties": {}, "required": []}
 
+MODEL = "recorded-model-id"
+
 
 @pytest.fixture(autouse=True)
-def clean_env(monkeypatch):
-    """A real OPENAI_MODEL in the shell or .env would change the recorded model id."""
-    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+def pinned_model(monkeypatch):
+    """The recorded model id is whatever the environment says, so pin it here rather
+    than let a real OPENAI_MODEL in the shell or .env decide what this asserts."""
+    monkeypatch.setenv(MODEL_ENV_VAR, MODEL)
 
 
 def usage(input_tokens=1000, cached=200, output_tokens=300, reasoning=50):
@@ -59,7 +62,7 @@ def test_a_call_inside_the_block_records_its_tokens_and_model():
     assert len(calls) == 1
     recorded = calls[0]
     assert recorded.schema_name == "hard_filter_result"
-    assert recorded.model == DEFAULT_MODEL
+    assert recorded.model == MODEL
     assert recorded.input_tokens == 1000
     assert recorded.cached_input_tokens == 200
     assert recorded.output_tokens == 300
