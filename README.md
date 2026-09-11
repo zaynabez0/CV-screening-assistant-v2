@@ -6,7 +6,7 @@ comes with the evidence behind it.
 
 **A recruiter drives every stage, and nothing is ever auto-rejected.** No stage runs
 until a human presses the button, and a candidate filtered out at any point stays on
-screen with the reason why. That is a GDPR Article 22 requirement, not a UI preference.
+screen with the reason why.
 
 The pipeline runs end to end in the browser, from pasting a job description to
 downloading the final Excel summary.
@@ -34,7 +34,7 @@ and look at any of them afterwards.
 
 **1. The job description becomes a list of requirements.** You paste the text or upload
 a file. The LLM returns one flat list, each item tagged `must_have`, `nice_to_have` or
-`inferred`. You edit the list and the tags, then confirm — after which it is locked,
+`inferred`. You edit the list and the tags, then confirm, after which it is locked,
 because the stages that judge against it would otherwise stop matching what they judged.
 
 That tag is the highest-leverage thing in the tool. `must_have` becomes a pass/fail gate
@@ -42,20 +42,20 @@ in Stage 1; the other two become Stage 3's scoring criteria. Over-tagging a must
 costs you good candidates.
 
 **2. The CVs become structured records.** Upload PDFs, DOCX files or images. Each one is
-checked first — file type by its actual bytes, size, duplicates, and whether any text can
+checked first, file type by its actual bytes, size, duplicates, and whether any text can
 be read out of it at all. Then the LLM turns that text into a record with education,
 experience, skills, languages and years of experience. You review the extractions before
 moving on.
 
-**3. Stage 1 — the hard filter.** For each candidate, the LLM checks every `must_have`
+**3. Stage 1** For each candidate, the LLM checks every `must_have`
 requirement and answers met or not met, quoting the evidence either way. Python does the
 ANDing: miss one requirement and you are filtered out. Nothing is decided by the model on
 its own, and a filtered candidate keeps their full evaluation list on screen.
 
-**4. Stage 2 — ranking.** One LLM call per surviving candidate, doing two jobs at once:
+**4. Stage 2** One LLM call per surviving candidate, doing two jobs at once:
 
 - a **job-fit score** (0-100) for how well the experience meets the requirements overall.
-  It judges the work, not the wording — a CV saying "server-side programming for web
+  It judges the work, not the wording, a CV saying "server-side programming for web
   services" can satisfy a "Python backend development" requirement with no words in common.
 - a **per-keyword check** against a list you control, present or absent with a quote. It
   reads the whole record, not just the skills list, so a tool used in a job description
@@ -66,7 +66,7 @@ Stage 3. The keyword list is your main lever here: short concrete terms ("Kubern
 "PostgreSQL") work better than whole sentences. Changing keywords needs a re-run; moving
 the cutoff just re-slices the ranking you already have.
 
-**5. Stage 3 — scoring.** The `nice_to_have` and `inferred` requirements become a rubric,
+**5. Stage 3** The `nice_to_have` and `inferred` requirements become a rubric,
 each with a 1-5 scale and a weight you can adjust. The LLM scores every criterion with a
 quote and a confidence level; Python computes the weighted total. A job description with
 no soft requirements has nothing to score, and the page offers to skip the stage.
@@ -74,7 +74,7 @@ no soft requirements has nothing to score, and the page offers to skip the stage
 **6. Final review.** Every candidate's history in one place, whatever stage they stopped
 at. Log an override with a written reason, and download the summary.
 
-Two things hold throughout. **The model gives judgements; Python does the arithmetic** —
+Two things hold throughout. **The model gives judgements; Python does the arithmetic**,
 every score is recomputable from what the model actually said, which is what makes a
 result auditable months later. And **candidates are anonymized before every LLM call**:
 name, email and phone are stripped from the record that gets sent.
@@ -117,8 +117,6 @@ name, email and phone are stripped from the record that gets sent.
 ## 2. Install and run
 
 ```bash
-git clone <your-repo-url>
-cd CV-screening-assistant-v2
 
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
@@ -282,29 +280,4 @@ A stage is launched by its view starting a management command as a subprocess; t
 command calls the matching function in `runs/services.py`, which is where the Django
 models meet the `screening/` functions.
 
-## 7. Before this goes near real candidate data
-
-This is a development build. Four things need doing first.
-
-1. **There is no authentication.** Only the override action requires a login. Every other
-   page — CV upload, the extracted personal data, the CSV export — is open to anyone who
-   can reach the server. Add `LoginRequiredMiddleware`, or `@login_required` to every view.
-
-2. **`DEBUG = True` and the `SECRET_KEY` is committed** in `config/settings.py`. Set
-   `DEBUG = False`, move the secret key into an environment variable, and fill in
-   `ALLOWED_HOSTS`.
-
-3. **The exports contain names and emails.** Anonymization protects the LLM calls, not the
-   recruiter's own review — a shortlist without names would be useless. Those files are
-   personal data the moment they are downloaded.
-
-4. **Anonymization is not total.** It strips `full_name`, `email` and `phone` from the top
-   level of the candidate record, but a name quoted inside an evidence line still reaches
-   the model. Worth knowing before you describe the pipeline as blind.
-
-For a DPIA, candidate data reaches the LLM provider at **four** points: CV structuring,
-and each of the three stages. Job description text reaches it once more, at extraction.
-
-There is also **no automated test suite** — it was removed deliberately when the project
-was handed over. Changes to the pipeline are worth checking by running a real screening
-end to end.
+Candidate data reaches the LLM provider at four points: CV structuring, and each of the three stages. Job description text reaches it once more, at extraction.
