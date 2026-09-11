@@ -1,28 +1,24 @@
 """The Stage 2 matching call — one LLM call per candidate, doing both halves.
 
-Stage 2 used to be the one stage that made no LLM call: a self-hosted embedding model
-for the semantic half, fuzzy string matching for the keyword half. Both are now this
-single structured call, which makes Stage 2 look like Stages 1 and 3 and removes the
-project's only heavy local dependency.
-
 Two things are asked for at once because they are judgements about the same candidate
 against the same job, and splitting them would double the cost for no gain:
 
-  * `fit_score`     — the overall match, replacing cosine similarity. An LLM reads
-                      "server-side programming for web services" as Python backend
-                      work for the same reason an embedding model did, but it can also
-                      say why, which the vector never could.
-  * `keyword_matches` — one verdict per keyword, replacing `fuzz.ratio >= 90`. This is
-                      strictly better than the fuzzy match it replaces: it reads the
-                      whole candidate rather than only the `skills` list, so a skill
-                      demonstrated in a job description finally counts, and it tells
-                      "Postgres"/"PostgreSQL" apart from "MySQL" by meaning rather than
-                      by edit distance.
+  * `fit_score`       — how well the candidate meets the requirements overall.
+  * `keyword_matches` — one verdict per keyword on the recruiter's list, read against
+                        the whole candidate rather than just the skills list, so a
+                        skill demonstrated in a job description counts.
+
+The model returns judgements only. Every number is computed in `ranking.py`.
 """
 
 from screening.common.llm import call_structured
 from screening.stage2_ranking.schema import MATCH_SCHEMA
-from screening.stage2_ranking.text_builders import build_jd_text
+
+
+def build_jd_text(requirements: list[dict]) -> str:
+    """The job description as the prompt sees it: one requirement per line, name and
+    description together, which is what the model needs to judge fit against."""
+    return "\n".join(f"{r['requirement']}: {r['description']}" for r in requirements)
 
 
 def match_candidate(jd_requirements: list[dict], anon_candidate: dict, keywords: list[str]) -> dict:
@@ -48,7 +44,7 @@ def match_candidate(jd_requirements: list[dict], anon_candidate: dict, keywords:
 
     # instructions is identical for every candidate in the run — the job description and
     # the keyword list do not vary — so it is the repeated prefix that gets cached
-    # automatically, same principle as Stages 1 and 3. Only the candidate is per-call.
+    # automatically, same as Stages 1 and 3. Only the candidate is per-call.
     instructions = f"""Judge how well this candidate matches a job description, and which
     of a recruiter's keywords they actually demonstrate. Two separate jobs. Base both ONLY
     on what the candidate data explicitly states — never assume, never infer a skill from a

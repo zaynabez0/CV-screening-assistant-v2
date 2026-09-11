@@ -20,16 +20,13 @@ import pytest
 
 from screening.stage2_ranking import ranking as ranking_module
 from screening.stage2_ranking.keywords import seed_keywords
-from screening.stage2_ranking.matching import match_candidate
+from screening.stage2_ranking.matching import build_jd_text, match_candidate
 from screening.stage2_ranking.ranking import (
-    rank_candidates,
     resolve_keyword_matches,
-    score_breakdown,
     score_candidate_match,
     shortlist_size,
 )
 from screening.stage2_ranking.schema import MATCH_SCHEMA
-from screening.stage2_ranking.text_builders import build_jd_text
 
 
 def candidate(skills=(), years=0, experience=()):
@@ -291,9 +288,10 @@ def test_the_keyword_half_can_overturn_the_fit_half(scripted_model):
         reply(fit=95, matches=[missing(k) for k in keywords]),    # strong fit, none of them
     )
 
-    scores = rank_candidates(JD, [PYTHON_DEV, DESIGNER], keywords)
+    strong_keywords = score_candidate_match(JD, PYTHON_DEV, keywords)["final_score"]
+    strong_fit = score_candidate_match(JD, DESIGNER, keywords)["final_score"]
 
-    assert scores[0] > scores[1]
+    assert strong_keywords > strong_fit
 
 
 def test_the_model_reasoning_and_evidence_survive_into_the_breakdown(scripted_model):
@@ -309,29 +307,12 @@ def test_the_model_reasoning_and_evidence_survive_into_the_breakdown(scripted_mo
 
 # --- Layer 3: across a field of candidates -------------------------------------
 
-def test_score_breakdown_makes_one_call_per_candidate_in_input_order(scripted_model):
-    """Returns scores positionally, NOT sorted — the caller pairs them with candidates.
-    A sort here would silently mis-attribute every score."""
+def test_scores_stay_paired_with_the_candidate_they_came_from(scripted_model):
+    """runs/services.py scores candidate by candidate so it can report progress, then
+    pairs each score with its candidate. Scoring must not reorder anything."""
     calls = scripted_model(reply(fit=10), reply(fit=90))
 
-    breakdown = score_breakdown(JD, [PYTHON_DEV, DESIGNER], [])
+    scores = [score_candidate_match(JD, c, [])["final_score"] for c in (PYTHON_DEV, DESIGNER)]
 
-    assert len(calls) == 2 and calls == [PYTHON_DEV, DESIGNER]
-    assert breakdown[0]["final_score"] < breakdown[1]["final_score"]
-
-
-def test_score_breakdown_on_an_empty_candidate_list_calls_nothing(scripted_model):
-    calls = scripted_model(reply())
-
-    assert score_breakdown(JD, [], ["Python"]) == []
-    assert calls == []
-
-
-def test_rank_candidates_agrees_with_score_breakdown(scripted_model):
-    scripted_model(reply(fit=80, matches=[found("Python")]), reply(fit=40))
-
-    breakdown = score_breakdown(JD, [PYTHON_DEV, DESIGNER], ["Python"])
-    scripted_model(reply(fit=80, matches=[found("Python")]), reply(fit=40))
-    combined = rank_candidates(JD, [PYTHON_DEV, DESIGNER], ["Python"])
-
-    assert [b["final_score"] for b in breakdown] == pytest.approx(combined)
+    assert calls == [PYTHON_DEV, DESIGNER]
+    assert scores[0] < scores[1]
