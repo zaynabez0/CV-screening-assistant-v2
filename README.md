@@ -1,13 +1,10 @@
-# CV Screening Assistant — v2
-
+# CV Screening Assistant 
 An internal HR tool: provide a job description, upload CVs, and run them through a
 three-stage selection pipeline to get a ranked shortlist with per-criterion evidence.
 
 **A recruiter reviews and can override every stage. Nothing is ever auto-rejected.**
 Every stage is triggered explicitly by a human, and every candidate filtered out stays
-visible with the reason for the decision — this is a GDPR Article 22 requirement, not a
-UI preference.
-
+visible with the reason for the decision
 ---
 
 ## Current status
@@ -17,14 +14,14 @@ exporting the final ranked list.
 
 | Part of the pipeline | Status |
 |---|---|
-| JD processing — text/file input, requirement extraction, review & edit | ✅ built and tested |
-| Shared text extraction — PDF, DOCX, scans and photos, OCR-backed | ✅ built and tested |
-| CV preprocessing — upload, validation, structuring, review | ✅ built and tested |
-| Stage 1 — hard filter | ✅ built and tested |
-| Stage 2 — ranking | ✅ built and tested |
-| Stage 3 — scoring | ✅ built and tested |
-| Final Review — history, overrides, Excel + CSV export | ✅ built and tested |
-| Closing a run (the `done` state) | ❌ not built — `review` is the last stage reachable |
+| JD processing: text/file input, requirement extraction, review & edit | built and tested |
+| Shared text extraction: PDF, DOCX, scans and photos, OCR-backed | built and tested |
+| CV preprocessing: upload, validation, structuring, review | built and tested |
+| Stage 1 (hard filter) | built and tested |
+| Stage 2 (ranking) | built and tested |
+| Stage 3 (scoring) | built and tested |
+| Final Review (history, overrides, Excel + CSV export) | built and tested |
+| Closing a run (the `done` state) | not built `review` is the last stage reachable |
 
 The Excel summary is the deliverable at the end of a run: one row per candidate,
 which stages they passed or failed, why they stopped where they did, and the final

@@ -12,5 +12,6 @@ API_test*.py
 # Django
 *.sqlite3
 media/
+# tests and samples
 tests/
 samples/
