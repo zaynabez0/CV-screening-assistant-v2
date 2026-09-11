@@ -95,25 +95,25 @@ python manage.py check_ocr
 ```
 
 It prints the Tesseract version, which language packs it found and which settings are in
-force — or tells you exactly what is missing. Point it at a file to do a live read:
+force — or tells you exactly what is missing.
+
+Point it at a file to do a live read. Use a scanned CV or a photo of a printed one: if
+its text comes back, OCR works end to end.
 
 ```bash
-python manage.py check_ocr screening/tests/fixtures/scanned_cv.pdf
+python manage.py check_ocr samples/some_cv.pdf
 ```
 
-That fixture is a CV that exists only as pictures. If its text comes back, OCR works.
-
-To see what a *real* CV extracts to — which is exactly the text the LLM is sent, so it is
-the first thing to look at when a CV structures badly:
+The same command shows what any CV extracts to — which is exactly the text the LLM is
+sent, so it is the first thing to look at when a CV structures badly:
 
 ```bash
 python manage.py check_ocr samples/some_cv.pdf --full      # print all of it
 python manage.py check_ocr samples/some_cv.pdf --out extracted.txt   # or read it in an editor
 ```
 
-Put real CVs in `samples/`, which is gitignored. **Not** in `screening/tests/fixtures/` —
-that folder is committed, and a real CV in Git history is personal data that cannot be
-taken back out.
+Put real CVs in `samples/`, which is gitignored. Never in a folder that gets committed:
+a real CV in Git history is personal data that cannot be taken back out.
 
 ### Tuning OCR
 
@@ -358,24 +358,7 @@ Every step that makes one call per CV — structuring, Stage 1, Stage 2, Stage 3
 background process and shows a progress bar that advances one candidate at a time. JD
 extraction is a single call and has no bar; there would be nothing to count.
 
-## 10. Run the tests
-
-```bash
-python -m pytest              # 404 passed
-python -m pytest -v           # see individual test names
-```
-
-Nothing reaches the network — the LLM is mocked throughout, Stage 2 included, and OCR
-runs against a local binary.
-
-The only tests that skip are the ones that need a real Tesseract, and they skip
-themselves with a reason when it is not installed (`python -m pytest -rs` lists them).
-That is the same promise the code makes to the app: no Tesseract means degraded, never
-broken. The OCR *policy* — what happens when the engine is missing, when a language pack
-is not installed, when the orientation guess is worthless — is tested against a fake
-engine in `screening/tests/test_ocr.py` and always runs.
-
-## 11. Project layout
+## 10. Project layout
 
 ```
 config/          Django settings, URLs
@@ -387,7 +370,6 @@ screening/       ALL pipeline logic — pure Python, ZERO Django imports
   stage1_hard_filter/
   stage2_ranking/
   stage3_scoring/
-  tests/           pytest suite + fixtures
 candidates/      Candidate model, upload & review views
 jobs/            JobDescription model, JD input + review/edit views
 runs/            ScreeningRun, StageResult, Override, run list, stage views,
@@ -399,7 +381,7 @@ The rule that matters: **`screening/` never imports Django.** Django views call 
 never the reverse. That is why the pipeline logic can be tested without a database or a
 web server, and it is enforced by a check in the test suite.
 
-## 12. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
@@ -423,7 +405,7 @@ web server, and it is enforced by a check in the test suite.
 | `database is locked` | SQLite limitation: a background stage and the web UI wrote at the same time. Retry. Known and accepted for v1. |
 | A confirmed job description can't be edited | By design — the stages already judged against it would no longer match. Start a new run. |
 
-## 13. Before this goes anywhere near real candidate data
+## 12. Before this goes anywhere near real candidate data
 
 This is a development build. Three things must be fixed first:
 
