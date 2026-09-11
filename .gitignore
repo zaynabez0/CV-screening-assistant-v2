@@ -12,11 +12,6 @@ API_test*.py
 # Django
 *.sqlite3
 media/
-
-# Real CVs used for manual testing. Put them HERE, never anywhere that gets
-# committed — a real CV in Git history is personal data that cannot be taken
-# back out.
+# tests and samples
+tests/
 samples/
-
-# check_ocr --out writes the extracted text of a real CV. Same rule.
-extracted.txt
