@@ -118,7 +118,9 @@ taken back out.
 ### Tuning OCR
 
 Every one of these is optional; the defaults are what runs if you set none of them.
-They go in `.env` (see `.env.example`), like the API key.
+They go in `.env`, like the settings in [§3](#3-configure-the-llm). They are
+deliberately **not** in `.env.example`: that file lists only what you have to fill
+in, and everything below already works without being set.
 
 | Variable | Default | What it does |
 |---|---|---|
@@ -136,7 +138,7 @@ schema change, and an out-of-date database fails at the first page that touches 
 column rather than at startup. Django warns about it when the server boots — read the
 lines above the traceback.
 
-## 3. Set your API key
+## 3. Configure the LLM
 
 Copy the template and fill it in — **`.env` is loaded automatically**, so this is all
 you need. Nothing has to be exported in your shell, on any platform: both
@@ -147,40 +149,25 @@ subprocesses, the tests and a plain `python your_script.py` all see the same val
 cp .env.example .env
 ```
 
-```ini
-# Standard OpenAI key
-OPENAI_API_KEY=sk-...
-```
+`.env.example` is the complete list of what this project reads. One name per setting,
+no aliases, four lines:
 
-### If your key goes through a gateway
+| Variable | Required | What it is |
+|---|---|---|
+| `KEY_REGULATOR_API_KEY` | **yes** | The API key, whether it is a plain OpenAI key or a gateway-issued sub-key. |
+| `OPENAI_MODEL` | **yes** | The id of the model to call, spelled exactly as your provider or gateway exposes it. |
+| `OPENAI_BASE_URL` | no | Your gateway's endpoint. Leave it blank to call `api.openai.com` directly. |
+| `TESSERACT_CMD` | no | Full path to the Tesseract binary, when it is installed but not on `PATH`. See [§1](#1-prerequisites). |
 
-If you were issued a **sub-key** routed through a gateway or proxy rather than talking to
-`api.openai.com` directly, set these instead:
+**`OPENAI_MODEL` has no default, on purpose.** Which model this project runs on is a
+deployment decision — and a gateway commonly fronts a model under an id of its own — so
+it is declared here rather than guessed in code. Leaving it blank fails at once, naming
+the variable, instead of failing at the first API call, once per candidate, halfway
+through a run.
 
-```ini
-# The key, under either name — OPENAI_API_KEY wins if you set both
-KEY_REGULATOR_API_KEY=your-sub-key
-
-# Your gateway's endpoint, under either name — OPENAI_BASE_URL wins if you set both
-BASE_URL=https://your-gateway.example.com/v1
-
-# Only if your gateway exposes the model under a different id
-OPENAI_MODEL=internal-luna-v2
-```
-
-| Variable | When you need it |
-|---|---|
-| `OPENAI_API_KEY` | The normal case. |
-| `KEY_REGULATOR_API_KEY` | Alternative name for the key, for a gateway-issued sub-key. Used only when `OPENAI_API_KEY` is unset. |
-| `OPENAI_BASE_URL` | Only when *not* calling `api.openai.com` directly. Leave it out otherwise. |
-| `BASE_URL` | Alternative name for the same endpoint. Used only when `OPENAI_BASE_URL` is unset. |
-| `OPENAI_MODEL` | Only when your gateway renames the model. Defaults to `gpt-5.6-luna`. |
-
-> ⚠️ **Don't leave a base URL blank.** An empty value is treated as "not set" by this
-> project — so a leftover `OPENAI_BASE_URL=` falls through to `BASE_URL` instead of
-> shadowing it — but if you removed that handling the OpenAI SDK would resolve it to an
-> empty address and every request would fail with a confusing error. Either give it a
-> real URL or comment the line out.
+Blank counts as unset for all of these, which is why the template ships with every line
+present and empty: `OPENAI_BASE_URL=` means "no gateway", not "an empty address". Values
+are stripped, so a trailing space picked up while copy-pasting a key does no harm.
 
 A real environment variable always wins over `.env`, so you can override any of these for
 a single command:
@@ -198,7 +185,7 @@ python -c "from screening.common.llm import get_client, get_model; c = get_clien
 ```
 
 If the key prints, `.env` is being read. If `endpoint` isn't what you expect, your
-`OPENAI_BASE_URL` / `BASE_URL` isn't reaching the app. If you get
+`OPENAI_BASE_URL` isn't reaching the app. If you get
 `ModuleNotFoundError: No module named 'screening'`, you are not in the project root —
 `.env` is found relative to the code, but `screening` is imported relative to where you
 started Python.
@@ -459,9 +446,10 @@ web server, and it is enforced by a check in the test suite.
 | A scan is read, but the accented words are mangled | The French pack is missing: `sudo apt-get install tesseract-ocr-fra`, or re-run the Windows installer and tick French. `check_ocr` lists the packs it found. |
 | Uploading a batch of scans is slow | Expected: OCR runs at upload, a second or two per page, because validation has to know whether the file holds readable text before it says the CV was accepted. It is not repeated at structuring — the text is stored on the candidate. |
 | A scan comes back as gibberish | It is probably sideways and the orientation check could not tell. Try a higher `OCR_DPI`, or `OCR_CONFIG=--psm 4` for a columned layout. |
-| `No LLM API key found in the environment. Set one of: ...` | Neither key variable is set. Check `.env` exists in the project root and holds `OPENAI_API_KEY` or `KEY_REGULATOR_API_KEY`. |
+| `KEY_REGULATOR_API_KEY is not set, so ...` | Check `.env` exists in the project root and that the key line is filled in. A line that is present but empty counts as unset. |
+| `OPENAI_MODEL is not set, so there is no model to call` | Same file, same rule — there is no default model, so this line must name one. |
 | `404` or "model not found" from a gateway | Usually the **model id**, not the key. Gateways often rename models — set `OPENAI_MODEL` to whatever yours exposes. |
-| Connection errors on any step | These are all LLM calls now. Check `OPENAI_BASE_URL` or `BASE_URL` points at your gateway; run the check snippet in [§3](#3-set-your-api-key). |
+| Connection errors on any step | These are all LLM calls now. Check `OPENAI_BASE_URL` points at your gateway; run the check snippet in [§3](#3-configure-the-llm). |
 | Upload page says the run is at the wrong stage | Confirm the job description first — that is what moves the run to `cv_pending`. |
 | "The job description's requirements have not been confirmed yet" | Press **Confirm requirements and continue** on the JD review page. |
 | Stage 2 is slow | It makes one API call per surviving candidate. Watch the progress bar — it advances once per call. |

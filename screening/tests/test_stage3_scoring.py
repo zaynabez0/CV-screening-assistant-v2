@@ -135,8 +135,8 @@ def test_weights_already_summing_to_one_are_left_alone():
 
 
 def test_zeroing_every_weight_falls_back_to_equal_weights():
-    """Guard beyond CLAUDE.md: the checkpoint lets a user type every weight, and
-    dividing by a zero total would be a ZeroDivisionError one keystroke away."""
+    """The checkpoint lets a user type every weight, and dividing by a zero total
+    would be a ZeroDivisionError one keystroke away."""
     rubric = build_rubric(JD)
 
     weighted = apply_user_weights(rubric, {"Kubernetes": 0, "Team leadership": 0})
@@ -284,7 +284,7 @@ def test_only_low_confidence_is_flagged():
 # --- aggregate_score: defending against bad model output --------------------------------
 
 def test_a_criterion_the_model_invented_does_not_crash_the_run():
-    """`criterion` is free text in SCORE_SCHEMA. CLAUDE.md's weight_map[...] lookup
+    """`criterion` is free text in SCORE_SCHEMA. A direct weight_map[...] lookup
     raises KeyError on a reworded name and takes down the whole batch."""
     weighted = apply_user_weights(build_rubric(JD), {})
     with_extra = scores() + [{"criterion": "Kubernetes administration", "score": 5,

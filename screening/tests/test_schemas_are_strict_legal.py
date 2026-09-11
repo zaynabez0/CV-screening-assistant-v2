@@ -1,9 +1,9 @@
 """Every schema must satisfy OpenAI's Structured Outputs `strict: true` rules.
 
-This exists because of a real failure: all four schemas were written exactly as CLAUDE.md
-specifies, which omits `additionalProperties: false`. The API rejects such a schema with a
-400 — so *every* LLM call in the app failed, and no test caught it, because every other
-test mocks `call_structured` and never inspects the schema.
+This exists because of a real failure: all four schemas were originally written without
+`additionalProperties: false`. The API rejects such a schema with a 400 — so *every* LLM
+call in the app failed, and no test caught it, because every other test mocks
+`call_structured` and never inspects the schema.
 
 Mocking the call is right (tests must not hit the network). Never validating the schema
 was the gap. This closes it.
