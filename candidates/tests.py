@@ -432,19 +432,3 @@ def test_confirming_is_refused_while_structuring_is_still_running(client, run):
     run.refresh_from_db()
     assert run.current_stage == "cv_pending"       # not advanced
 
-
-def test_the_structuring_price_shows_above_the_confirm_button(client, run):
-    client.post(reverse("candidates:upload", args=[run.pk]),
-                {"cvs": [upload_file("clean_cv.pdf")]})
-    structure(run)
-    run.step_costs = {"cv_structuring": {
-        "calls": 3, "input_tokens": 10_000, "cached_input_tokens": 4_000,
-        "output_tokens": 2_000, "reasoning_tokens": 0, "seconds": 9.4, "model": "x",
-    }}
-    run.save(update_fields=["step_costs"])
-
-    html = client.get(reverse("candidates:review", args=[run.pk])).content.decode()
-
-    assert "This step cost" in html
-    assert "$0.0037" in html
-    assert "3 LLM calls" in html

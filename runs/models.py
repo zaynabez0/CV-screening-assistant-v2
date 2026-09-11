@@ -52,14 +52,6 @@ class ScreeningRun(models.Model):
     job_processed = models.PositiveIntegerField(default=0)
     job_total = models.PositiveIntegerField(default=0)
 
-    # What each LLM-calling step of this run spent: one entry per step, keyed by the step
-    # names in runs/usage.py, each holding call count, token counts and elapsed seconds.
-    # Tokens rather than money — the price is computed on read from the rates in
-    # screening/common/pricing.py, so correcting a rate re-prices runs already finished.
-    # A JSON field rather than a table: the readout is a per-step total, so per-call rows
-    # would be storage nobody reads.
-    step_costs = models.JSONField(default=dict)
-
     def __str__(self):
         return f"Run #{self.pk} ({self.get_current_stage_display()})"
 

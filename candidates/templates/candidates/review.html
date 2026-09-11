@@ -62,7 +62,6 @@
     <p><a href="{% url 'runs:stage1_review' run.pk %}">Continue to Stage 1 &rarr;</a></p>
   {% elif ready_count and run.job_status != "running" %}
     <h2>Confirm</h2>
-    {% include "runs/_step_cost.html" %}
     <p>Confirming locks in {{ ready_count }} structured candidate(s) and makes Stage 1 available.
        Nothing runs automatically.</p>
     <form method="post" action="{% url 'candidates:confirm' run.pk %}">

@@ -154,20 +154,20 @@ no aliases, four lines:
 
 | Variable | Required | What it is |
 |---|---|---|
-| `KEY_REGULATOR_API_KEY` | **yes** | The API key, whether it is a plain OpenAI key or a gateway-issued sub-key. |
+| `KEY_REGULATOR_API_KEY` | **yes** | The API key your provider issued. |
 | `MODEL` | **yes** | The id of the model to call, spelled exactly as your provider or gateway exposes it. |
-| `BASE_URL` | no | Your gateway's endpoint. Leave it blank to call `api.openai.com` directly. |
+| `BASE_URL` | **yes** | The endpoint to call, e.g. your gateway's. No default — the project is not tied to one provider. |
 | `TESSERACT_CMD` | no | Full path to the Tesseract binary, when it is installed but not on `PATH`. See [§1](#1-prerequisites). |
 
-**`MODEL` has no default, on purpose.** Which model this project runs on is a
-deployment decision — and a gateway commonly fronts a model under an id of its own — so
-it is declared here rather than guessed in code. Leaving it blank fails at once, naming
-the variable, instead of failing at the first API call, once per candidate, halfway
-through a run.
+**Neither `MODEL` nor `BASE_URL` has a default, on purpose.** Which model to run and
+where to reach it are deployment decisions, and nothing here assumes an OpenAI model or
+an OpenAI address. The `openai` package is used only as the client library, so any
+provider speaking the OpenAI Responses API will do.
 
-Blank counts as unset for all of these, which is why the template ships with every line
-present and empty: `BASE_URL=` means "no gateway", not "an empty address". Values
-are stripped, so a trailing space picked up while copy-pasting a key does no harm.
+Blank counts as unset for all three, which is why the template ships with every line
+present and empty: a line that exists but is empty fails at startup, naming the variable,
+rather than at the first API call — once per candidate, halfway through a run. Values are
+stripped, so a trailing space picked up while copy-pasting does no harm.
 
 A real environment variable always wins over `.env`, so you can override any of these for
 a single command:
@@ -184,7 +184,7 @@ Run this **from the project root** — no Django bootstrap needed:
 python -c "from screening.common.llm import get_client, get_model; c = get_client(); print('key     :', c.api_key[:8] + '...'); print('endpoint:', c.base_url); print('model   :', get_model())"
 ```
 
-If the key prints, `.env` is being read. If `endpoint` isn't what you expect, your
+If all three print, `.env` is being read. If `endpoint` isn't what you expect, your
 `BASE_URL` isn't reaching the app. If you get
 `ModuleNotFoundError: No module named 'screening'`, you are not in the project root —
 `.env` is found relative to the code, but `screening` is imported relative to where you
@@ -355,40 +355,7 @@ Stage 1 — nobody silently disappears from the record.
 
 Both files carry candidate names and emails. Treat the downloads as personal data.
 
-## 9. What each step costs
-
-Every LLM call is timed and its tokens counted, and each checkpoint shows what that step
-spent, right above the button that moves the run on:
-
-> This step cost **$0.0093** — 12 LLM calls, 41.0 s.
-> 34,800 input tokens (25,200 cached) and 5,760 output, at $0.20 in / $0.02 cached /
-> $1.20 out per M tokens.
-
-The token counts and the rates are printed next to the figure on purpose: the price is
-checkable by hand rather than something the page merely asserts.
-
-### Changing the rates
-
-They are three constants at the top of `screening/common/pricing.py`:
-
-```python
-USD_PER_MILLION_INPUT = Decimal("0.20")
-USD_PER_MILLION_CACHED_INPUT = Decimal("0.02")
-USD_PER_MILLION_OUTPUT = Decimal("1.20")
-```
-
-Edit them and nothing else moves. Cost is computed from stored token counts every time it
-is displayed, so a rate change re-prices runs that have already finished — there is no
-saved figure to go stale, and no model id to match, which is what a previous version got
-wrong: rates keyed on a model name silently priced nothing whenever the gateway exposed
-the model under a different id.
-
-**The cached rate matters.** Stages 1, 2 and 3 send the same job description and rubric
-with every candidate, and the API bills that repeated prefix at a tenth of the normal
-input rate. In the example above, 25,200 of the 34,800 input tokens were cached — which is
-why Stage 1 costs less than structuring despite reading more.
-
-### Progress
+## 9. Progress
 
 Every step that makes one call per CV — structuring, Stage 1, Stage 2, Stage 3 — runs in a
 background process and shows a progress bar that advances one candidate at a time. JD
@@ -397,7 +364,7 @@ extraction is a single call and has no bar; there would be nothing to count.
 ## 10. Run the tests
 
 ```bash
-python -m pytest              # 466 passed
+python -m pytest              # 404 passed
 python -m pytest -v           # see individual test names
 ```
 
@@ -417,7 +384,7 @@ engine in `screening/tests/test_ocr.py` and always runs.
 config/          Django settings, URLs
 screening/       ALL pipeline logic — pure Python, ZERO Django imports
   common/          text extraction (PDF/DOCX/images, OCR-backed), the Tesseract
-                   plumbing, the one LLM helper, the token rates
+                   plumbing, the one LLM helper
   jd/              JD_SCHEMA, get_jd_text, extract_requirements
   cv/              validation, CV_SCHEMA structuring, anonymization
   stage1_hard_filter/
@@ -427,8 +394,8 @@ screening/       ALL pipeline logic — pure Python, ZERO Django imports
 candidates/      Candidate model, upload & review views
 jobs/            JobDescription model, JD input + review/edit views
 runs/            ScreeningRun, StageResult, Override, run list, stage views,
-                 usage.py (per-step cost + timing), services.py (the four
-                 background jobs), exports.py (Excel summary) + CSV export
+                 services.py (the four background jobs), exports.py (Excel
+                 summary) + CSV export
 ```
 
 The rule that matters: **`screening/` never imports Django.** Django views call into it,
@@ -448,12 +415,12 @@ web server, and it is enforced by a check in the test suite.
 | A scan comes back as gibberish | It is probably sideways and the orientation check could not tell. Try a higher `OCR_DPI`, or `OCR_CONFIG=--psm 4` for a columned layout. |
 | `KEY_REGULATOR_API_KEY is not set, so ...` | Check `.env` exists in the project root and that the key line is filled in. A line that is present but empty counts as unset. |
 | `MODEL is not set, so there is no model to call` | Same file, same rule — there is no default model, so this line must name one. |
+| `BASE_URL is not set, so there is no endpoint ...` | Same again — there is no default endpoint either. Fill in the address your provider gave you. |
 | `404` or "model not found" from a gateway | Usually the **model id**, not the key. Gateways often rename models — set `MODEL` to whatever yours exposes. |
 | Connection errors on any step | These are all LLM calls now. Check `BASE_URL` points at your gateway; run the check snippet in [§3](#3-configure-the-llm). |
 | Upload page says the run is at the wrong stage | Confirm the job description first — that is what moves the run to `cv_pending`. |
 | "The job description's requirements have not been confirmed yet" | Press **Confirm requirements and continue** on the JD review page. |
 | Stage 2 is slow | It makes one API call per surviving candidate. Watch the progress bar — it advances once per call. |
-| A step shows no price | It has not run yet, or it made no LLM call (a JD with no must-haves skips Stage 1's call entirely). Token counts and prices only appear once a call has actually happened. |
 | The progress bar sits at 0% | The background process did not start. Check that `manage.py run_cv_structuring <run_id>` (or `run_stage1`, etc.) works from the project root. |
 | A stage says "failed" with a network error | Expected if the API is unreachable. Fix the connection and press the button again — re-running replaces the previous results rather than duplicating them. |
 | `database is locked` | SQLite limitation: a background stage and the web UI wrote at the same time. Retry. Known and accepted for v1. |

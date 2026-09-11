@@ -14,7 +14,6 @@ from django.shortcuts import get_object_or_404, redirect, render
 
 from runs.models import ScreeningRun
 from runs.services import StageNotReady, structuring_preflight
-from runs.usage import step_cost
 from screening.cv.validation import (
     CVValidationError,
     DuplicateFileError,
@@ -169,7 +168,6 @@ def review_candidates(request, run_id):
             "awaiting_structuring": [c for c in candidates if c.status == "pending"],
             "low_confidence_count": sum(1 for c in ready if c.is_low_confidence),
             "ready_count": len(ready),
-            "step_cost": step_cost(run, "cv_structuring"),
         },
     )
 

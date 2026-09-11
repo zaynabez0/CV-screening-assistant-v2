@@ -17,7 +17,6 @@ from screening.stage3_scoring.rubric import apply_user_weights, build_rubric, ru
 from screening.stage3_scoring.scoring import score_candidate
 
 from .models import Override, StageResult
-from .usage import record_step
 
 
 class StageNotReady(Exception):
@@ -57,24 +56,23 @@ def run_cv_structuring(run) -> dict:
     run.save(update_fields=["job_message"])
 
     structured, failed = 0, 0
-    with record_step(run, "cv_structuring"):
-        for index, candidate in enumerate(pending, start=1):
-            try:
-                # Upload validation already read this file — with OCR, for a scan. Re-reading
-                # it here would repeat that work per page for an identical result. The
-                # fallback covers candidates recorded before the text was stored.
-                text = candidate.extracted_text or extract_text_from_file(candidate.file.path)
-                candidate.extracted_text = text
-                candidate.extracted_json = structure_candidate(text)
-            except Exception as exc:  # noqa: BLE001 — an API failure is not the candidate's fault
-                candidate.rejection_reason = f"structuring failed: {type(exc).__name__}: {exc}"
-                failed += 1
-            else:
-                candidate.rejection_reason = ""
-                candidate.status = "ready"
-                structured += 1
-            candidate.save()
-            run.mark_job_progress(index)
+    for index, candidate in enumerate(pending, start=1):
+        try:
+            # Upload validation already read this file — with OCR, for a scan. Re-reading
+            # it here would repeat that work per page for an identical result. The
+            # fallback covers candidates recorded before the text was stored.
+            text = candidate.extracted_text or extract_text_from_file(candidate.file.path)
+            candidate.extracted_text = text
+            candidate.extracted_json = structure_candidate(text)
+        except Exception as exc:  # noqa: BLE001 — an API failure is not the candidate's fault
+            candidate.rejection_reason = f"structuring failed: {type(exc).__name__}: {exc}"
+            failed += 1
+        else:
+            candidate.rejection_reason = ""
+            candidate.status = "ready"
+            structured += 1
+        candidate.save()
+        run.mark_job_progress(index)
 
     note = f", {failed} failed — press again to retry the failures" if failed else ""
     run.mark_job_finished(f"{structured} CV(s) structured{note}.")
@@ -117,20 +115,19 @@ def run_stage1(run) -> dict:
     StageResult.objects.filter(run=run, stage="stage1").delete()
 
     passed_count = 0
-    with record_step(run, "stage1"):
-        for index, candidate in enumerate(candidates, start=1):
-            anon = anonymize_candidate(candidate.extracted_json)
-            result = evaluate_hard_filters(anon, must_haves)
+    for index, candidate in enumerate(candidates, start=1):
+        anon = anonymize_candidate(candidate.extracted_json)
+        result = evaluate_hard_filters(anon, must_haves)
 
-            StageResult.objects.create(
-                run=run,
-                candidate=candidate,
-                stage="stage1",
-                passed=result["passed"],
-                output_json={"evaluations": result["evaluations"]},
-            )
-            passed_count += bool(result["passed"])
-            run.mark_job_progress(index)
+        StageResult.objects.create(
+            run=run,
+            candidate=candidate,
+            stage="stage1",
+            passed=result["passed"],
+            output_json={"evaluations": result["evaluations"]},
+        )
+        passed_count += bool(result["passed"])
+        run.mark_job_progress(index)
 
     summary = {
         "evaluated": len(candidates),
@@ -184,11 +181,10 @@ def run_stage2(run) -> dict:
     # time is spent in these calls, one per candidate, not in the inserts.
     requirements = run.job_description.requirements
     breakdown = []
-    with record_step(run, "stage2"):
-        for index, candidate in enumerate(survivors, start=1):
-            anon = anonymize_candidate(candidate.extracted_json)
-            breakdown.append(score_candidate_match(requirements, anon, keywords))
-            run.mark_job_progress(index)
+    for index, candidate in enumerate(survivors, start=1):
+        anon = anonymize_candidate(candidate.extracted_json)
+        breakdown.append(score_candidate_match(requirements, anon, keywords))
+        run.mark_job_progress(index)
 
     # Highest score first; ties keep upload order so the ranking is reproducible.
     order = sorted(range(len(survivors)), key=lambda i: (-breakdown[i]["final_score"], i))
@@ -269,24 +265,23 @@ def run_stage3(run) -> dict:
     StageResult.objects.filter(run=run, stage="stage3").delete()
 
     anomalies = 0
-    with record_step(run, "stage3"):
-        for index, candidate in enumerate(shortlist, start=1):
-            anon = anonymize_candidate(candidate.extracted_json)
-            criterion_scores = score_candidate(anon, weighted)
-            aggregated = aggregate_score(criterion_scores, weighted)
+    for index, candidate in enumerate(shortlist, start=1):
+        anon = anonymize_candidate(candidate.extracted_json)
+        criterion_scores = score_candidate(anon, weighted)
+        aggregated = aggregate_score(criterion_scores, weighted)
 
-            StageResult.objects.create(
-                run=run,
-                candidate=candidate,
-                stage="stage3",
-                passed=None,  # scoring is not a gate — the recruiter reads the ranking
-                output_json={
-                    **aggregated,
-                    "weights_used": {c["requirement"]: c["weight"] for c in weighted},
-                },
-            )
-            anomalies += bool(aggregated["unknown_criteria"] or aggregated["unscored_criteria"])
-            run.mark_job_progress(index)
+        StageResult.objects.create(
+            run=run,
+            candidate=candidate,
+            stage="stage3",
+            passed=None,  # scoring is not a gate — the recruiter reads the ranking
+            output_json={
+                **aggregated,
+                "weights_used": {c["requirement"]: c["weight"] for c in weighted},
+            },
+        )
+        anomalies += bool(aggregated["unknown_criteria"] or aggregated["unscored_criteria"])
+        run.mark_job_progress(index)
 
     note = f" {anomalies} had criteria the model mis-named or skipped." if anomalies else ""
     run.mark_job_finished(f"Stage 3 complete: {len(shortlist)} candidate(s) scored.{note}")
