@@ -1,18 +1,14 @@
-"""The recruiter's keyword list — seeding it. Matching against it lives in `matching.py`.
-
-The list is the primary lever the user has over Stage 2, and this seeds a first version
-of it from the job description so the checkpoint opens with something to edit rather
-than an empty box.
-"""
+"""Seeding the recruiter's keyword list. Matching against it lives in `matching.py`."""
 
 
 def seed_keywords(requirements: list[dict]) -> list[str]:
-    """Pre-fill the keyword list from the JD's must_have + nice_to_have requirement names.
+    """A first keyword list, from the JD's must_have and nice_to_have requirement names.
 
-    A starting point only — the user adds and removes freely at the checkpoint, and
-    that editing is the primary lever they have over Stage 2. `inferred` requirements
-    are excluded: they are not stated in the JD, so their wording is the model's
-    phrasing rather than the employer's, and it makes a poor literal search term.
+    A starting point only: editing this list at the checkpoint is the main lever the
+    recruiter has over Stage 2, so it opens with something to change rather than an
+    empty box. `inferred` requirements are excluded — they are not stated in the JD, so
+    their wording is the model's rather than the employer's, which makes a poor search
+    term.
     """
     seen, seeded = set(), []
     for requirement in requirements:

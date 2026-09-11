@@ -10,7 +10,11 @@ from unittest.mock import patch
 
 import pytest
 
-from screening.stage1_hard_filter.evaluation import evaluate_hard_filters, select_must_have
+from screening.stage1_hard_filter.evaluation import (
+    evaluate_hard_filters,
+    resolve_evaluations,
+    select_must_have,
+)
 from screening.stage1_hard_filter.schema import HARD_FILTER_SCHEMA
 
 MUST_HAVES = [
@@ -162,14 +166,87 @@ def test_a_jd_with_no_must_haves_passes_everyone_without_calling_the_llm():
 
 
 def test_a_single_unmet_requirement_among_many_still_fails():
+    requirements = [
+        {"requirement": f"req {i}", "description": "", "type": "must_have",
+         "scale": "", "suggested_weight": 0}
+        for i in range(10)
+    ]
     many = {"evaluations": [
         {"requirement": f"req {i}", "met": True, "evidence": "e", "reason": "r"} for i in range(9)
     ] + [{"requirement": "req 9", "met": False, "evidence": "", "reason": "missing"}]}
 
     with patch("screening.stage1_hard_filter.evaluation.call_structured", return_value=many):
+        result = evaluate_hard_filters(ANON_CANDIDATE, requirements)
+
+    assert result["passed"] is False
+    assert len(result["evaluations"]) == 10
+
+
+def test_an_empty_response_does_not_pass_the_gate():
+    """`all([])` is True, so a model that returns nothing would once have passed every
+    candidate through the hard filter having checked nothing at all."""
+    with patch("screening.stage1_hard_filter.evaluation.call_structured",
+               return_value={"evaluations": []}):
         result = evaluate_hard_filters(ANON_CANDIDATE, MUST_HAVES)
 
     assert result["passed"] is False
+    assert len(result["evaluations"]) == 2                 # both still shown, with reasons
+    assert all(not e["met"] for e in result["evaluations"])
+
+
+def test_a_requirement_the_model_skipped_is_not_treated_as_met():
+    """A partial answer is the likelier failure: one requirement evaluated, the other
+    quietly dropped. The missing one must not disappear from the audit trail."""
+    partial = {"evaluations": [
+        {"requirement": "5+ years Python", "met": True, "evidence": "q", "reason": "r"},
+    ]}
+    with patch("screening.stage1_hard_filter.evaluation.call_structured", return_value=partial):
+        result = evaluate_hard_filters(ANON_CANDIDATE, MUST_HAVES)
+
+    assert result["passed"] is False
+    assert [e["requirement"] for e in result["evaluations"]] == ["5+ years Python", "Fluent French"]
+    assert result["evaluations"][1]["met"] is False
+    assert "did not evaluate" in result["evaluations"][1]["reason"]
+
+
+def test_a_criterion_the_model_invented_is_dropped():
+    """Mirrors Stage 3's aggregation: a name that was never asked about is not a verdict
+    on anything, so it must not appear on the review page as though it were."""
+    invented = {"evaluations": [
+        {"requirement": "5+ years Python", "met": True, "evidence": "q", "reason": "r"},
+        {"requirement": "Fluent French", "met": True, "evidence": "q", "reason": "r"},
+        {"requirement": "Willing to relocate", "met": False, "evidence": "", "reason": "no"},
+    ]}
+    with patch("screening.stage1_hard_filter.evaluation.call_structured", return_value=invented):
+        result = evaluate_hard_filters(ANON_CANDIDATE, MUST_HAVES)
+
+    assert result["passed"] is True
+    assert [e["requirement"] for e in result["evaluations"]] == ["5+ years Python", "Fluent French"]
+
+
+def test_the_jd_spelling_of_a_requirement_is_what_gets_stored():
+    """The model is asked to repeat each name exactly; when it does not, the recruiter
+    still sees the requirement as they wrote it."""
+    reworded = {"evaluations": [
+        {"requirement": "5+ YEARS PYTHON", "met": True, "evidence": "q", "reason": "r"},
+        {"requirement": "  fluent french  ", "met": True, "evidence": "q", "reason": "r"},
+    ]}
+    with patch("screening.stage1_hard_filter.evaluation.call_structured", return_value=reworded):
+        result = evaluate_hard_filters(ANON_CANDIDATE, MUST_HAVES)
+
+    assert result["passed"] is True
+    assert [e["requirement"] for e in result["evaluations"]] == ["5+ years Python", "Fluent French"]
+
+
+def test_resolve_evaluations_without_a_model_call():
+    """The resolution rule on its own: order follows the JD, not the response."""
+    resolved = resolve_evaluations(
+        [{"requirement": "Fluent French", "met": True, "evidence": "e", "reason": "r"}],
+        MUST_HAVES,
+    )
+
+    assert [e["requirement"] for e in resolved] == ["5+ years Python", "Fluent French"]
+    assert [e["met"] for e in resolved] == [False, True]
 
 
 @pytest.mark.parametrize("returned, expected", [(all_met(), True), (one_unmet(), False)])

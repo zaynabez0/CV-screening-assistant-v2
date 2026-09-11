@@ -1,10 +1,12 @@
-"""Anonymization — applied once after preprocessing, reused by every selection stage.
+"""Dropping direct identifiers before a candidate is sent to the model.
 
-Computed on demand wherever a stage needs it, never persisted as a second copy of the
-data. Stage 1, 2 and 3 all call this rather than each deriving their own version.
+Stages 1, 2 and 3 all call this rather than each deriving their own version, and it is
+computed on demand rather than stored — a second, anonymized copy of every candidate
+would be one more place personal data can leak from.
 """
+
+DIRECT_IDENTIFIERS = {"full_name", "email", "phone"}
 
 
 def anonymize_candidate(candidate: dict) -> dict:
-    strip = {"full_name", "email", "phone"}
-    return {k: v for k, v in candidate.items() if k not in strip}
+    return {k: v for k, v in candidate.items() if k not in DIRECT_IDENTIFIERS}

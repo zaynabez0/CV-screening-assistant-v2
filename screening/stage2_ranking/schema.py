@@ -1,9 +1,8 @@
 """MATCH_SCHEMA — one candidate's Stage 2 match against the job description.
 
-Two jobs in one response, because Stage 2 blends two halves and both now come from
-the same call: `fit_score` is the overall judgement of the candidate against the
-requirements, and `keyword_matches` is a per-keyword presence check against the
-recruiter's editable list.
+Two jobs in one response, because Stage 2 blends two halves: `fit_score` is the overall
+judgement of the candidate against the requirements, and `keyword_matches` is a
+per-keyword presence check against the recruiter's editable list.
 
 `fit_score` is an integer 0-100 rather than a float 0-1: models are markedly more
 consistent on a 0-100 scale, and the division back to 0-1 happens in Python where it

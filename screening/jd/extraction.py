@@ -1,7 +1,7 @@
 """JD text in, a flat tagged requirements list out.
 
-The file path here is the *second* caller of the shared text-extraction function —
-CV upload is the first. Same operation, same code, deliberately not duplicated.
+A JD can arrive as a pasted string or an uploaded file. The file path goes through the
+same `extract_text_from_file` every CV does — same operation, one implementation.
 """
 
 from screening.common.llm import call_structured
@@ -11,7 +11,7 @@ from screening.jd.schema import JD_SCHEMA
 
 def get_jd_text(uploaded_file=None, free_text=None) -> str:
     if uploaded_file is not None:
-        return extract_text_from_file(uploaded_file.path)  # shared function, see below
+        return extract_text_from_file(uploaded_file.path)
     if free_text is not None:
         return free_text
     raise ValueError("Either uploaded_file or free_text must be provided")
