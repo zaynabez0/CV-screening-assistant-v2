@@ -33,20 +33,13 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        if not ocr.OCR_ENABLED:
-            self.stdout.write(self.style.WARNING(
-                "OCR is switched OFF (OCR_ENABLED). Files with no text layer will be rejected."
-            ))
-        elif ocr.ocr_available():
+        if ocr.ocr_available():
             self.stdout.write(self.style.SUCCESS(f"Tesseract {ocr.ocr_version()} is available."))
             self.stdout.write(f"  languages in use : {ocr.ocr_languages()}")
             self.stdout.write(f"  installed packs  : {', '.join(ocr.installed_languages()) or '(none)'}")
             self.stdout.write(f"  render DPI       : {ocr.OCR_DPI}")
             self.stdout.write(f"  OCR below        : {ocr.OCR_MIN_CHARS_PER_PAGE} chars/page")
             self.stdout.write(f"  page cap         : {ocr.OCR_MAX_PAGES}")
-            self.stdout.write(f"  orientation check: {'on' if ocr.OCR_DETECT_ORIENTATION else 'off'}")
-            if ocr.OCR_CONFIG:
-                self.stdout.write(f"  extra flags      : {ocr.OCR_CONFIG}")
         else:
             self.stdout.write(self.style.ERROR("Tesseract is NOT available."))
             self.stdout.write(

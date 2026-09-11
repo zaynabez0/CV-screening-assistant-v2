@@ -1,33 +1,16 @@
 """Tesseract plumbing: the one place in the project that talks to the OCR engine.
 
 `text_extraction` decides *what* to OCR — a PDF page that came back blank, a picture
-pasted into a Word file, an uploaded scan. This module knows *how*, and answers the
-question every caller needs settled before it promises anything: is OCR actually
-installed on this machine?
+pasted into a Word file, an uploaded scan. This module knows *how*.
 
 Nothing here raises. OCR is a fallback, so a machine without Tesseract must still
 process the CVs that do carry a text layer: every failure path returns "" and logs,
 and `ocr_available()` reports whether to expect anything at all.
 
-Configuration is environment-only, like screening/common/llm.py — this package must
-stay importable with zero Django imports:
-
-    OCR_ENABLED             "0"/"false"/"no"/"off" turns OCR off entirely. Default on.
-    OCR_LANGUAGES           Tesseract language packs, "+"-joined. Default "eng+fra".
-                            Packs that are not installed are dropped rather than
-                            failing the call — a missing one makes Tesseract abort
-                            the whole image, which would lose a readable CV.
-    OCR_DPI                 render resolution for PDF pages. Default 300, the
-                            resolution Tesseract is trained for; 150 is visibly worse.
-    OCR_MIN_CHARS_PER_PAGE  below this, a page counts as "no text" and gets OCR'd.
-                            Default 100.
-    OCR_MAX_PAGES           hard cap on pages OCR'd per file. Default 30.
-    OCR_CONFIG              extra flags passed through, e.g. "--psm 4" for a CV laid
-                            out in columns. Empty by default.
-    OCR_DETECT_ORIENTATION  check every OCR'd page for a sideways or upside-down scan
-                            first. Default on; costs one extra pass per page.
-    TESSERACT_CMD           full path to the binary, for a Windows install that is
-                            not on PATH.
+The settings below are constants rather than environment variables. They are tuning
+values, not deployment ones — the same numbers are right on every machine — so they
+live here where they can be read next to the code that uses them. The exception is
+`TESSERACT_CMD`, which really does differ per machine and is in `.env.example`.
 """
 
 import io
@@ -47,37 +30,22 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 
-
-def _env_flag(name: str, default: bool) -> bool:
-    raw = (os.getenv(name) or "").strip().lower()
-    if not raw:
-        return default
-    return raw not in {"0", "false", "no", "off"}
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = (os.getenv(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        logger.warning("%s=%r is not a whole number — using %s.", name, raw, default)
-        return default
-    if value <= 0:
-        logger.warning("%s=%s must be positive — using %s.", name, value, default)
-        return default
-    return value
-
-
-OCR_ENABLED = _env_flag("OCR_ENABLED", True)
-OCR_LANGUAGES = (os.getenv("OCR_LANGUAGES") or "eng+fra").strip()
-OCR_DPI = _env_int("OCR_DPI", 300)
-OCR_MIN_CHARS_PER_PAGE = _env_int("OCR_MIN_CHARS_PER_PAGE", 100)
-OCR_MAX_PAGES = _env_int("OCR_MAX_PAGES", 30)
-OCR_CONFIG = (os.getenv("OCR_CONFIG") or "").strip()
-OCR_DETECT_ORIENTATION = _env_flag("OCR_DETECT_ORIENTATION", True)
+# Full path to the binary, for a Windows install that is not on PATH.
 TESSERACT_CMD = (os.getenv("TESSERACT_CMD") or "").strip()
+
+# Language packs to read with, "+"-joined. A pack that is not installed is dropped
+# rather than failing the call — see ocr_languages().
+OCR_LANGUAGES = "eng+fra"
+
+# Resolution for rendering PDF pages. 300 is what Tesseract is trained for; 150 is
+# visibly worse.
+OCR_DPI = 300
+
+# A page with less text than this counts as a scan and gets OCR'd.
+OCR_MIN_CHARS_PER_PAGE = 100
+
+# Cap on pages OCR'd per file, so one huge document cannot tie up an upload.
+OCR_MAX_PAGES = 30
 
 # Below this, an image is upscaled before OCR: Tesseract reads ~300 DPI well and
 # small images badly, and a CV photographed on a phone at a distance lands here.
@@ -109,13 +77,11 @@ def _pytesseract():
 
 
 def ocr_available() -> bool:
-    """True when Tesseract is installed, reachable and enabled.
+    """True when Tesseract is installed and reachable.
 
     Probed once and cached: it shells out to the binary, and the CV upload path
     would otherwise pay for that on every page of every file.
     """
-    if not OCR_ENABLED:
-        return False
     if not _state["probed"]:
         _state["probed"] = True
         try:
@@ -202,12 +168,12 @@ def prepare_image(image: Image.Image) -> Image.Image:
     return image
 
 
-def detect_rotation(image: Image.Image) -> int:
+def _detect_rotation(image: Image.Image) -> int:
     """How many degrees clockwise this image must turn to be upright. 0 if it already is.
 
     Runs at full resolution on purpose: Tesseract's orientation pass needs the glyph
-    detail, and on a copy downscaled to fit 1000px it starts failing outright on
-    sideways pages — which is precisely the case it exists to catch.
+    detail, and on a downscaled copy it starts failing outright on sideways pages —
+    precisely the case it exists to catch.
     """
     pytesseract = _pytesseract()
     try:
@@ -222,35 +188,28 @@ def detect_rotation(image: Image.Image) -> int:
     return angle
 
 
-def image_to_text(image: Image.Image, detect_orientation: bool | None = None) -> str:
+def image_to_text(image: Image.Image) -> str:
     """Read one already-prepared image. Returns "" rather than raising, always.
 
-    Orientation is checked *before* recognition rather than after. A page fed in
-    sideways does not come back short — Tesseract confidently returns a full page of
-    nonsense — so there is no thin result to notice afterwards, and a scanner that
-    fed a stack in rotated would otherwise poison a whole batch silently. The check
-    costs one extra Tesseract pass per page; OCR_DETECT_ORIENTATION=0 turns it off
-    for a source known to be upright.
+    Orientation is checked before recognition, not after. A page fed in sideways does
+    not come back short — Tesseract confidently returns a full page of nonsense — so
+    there is nothing to notice afterwards, and a scanner that took a stack in rotated
+    would otherwise poison a whole batch silently.
     """
     if not ocr_available():
         return ""
-    if detect_orientation is None:
-        detect_orientation = OCR_DETECT_ORIENTATION
-    if detect_orientation:
-        angle = detect_rotation(image)
-        if angle:
-            logger.info("Rotating a page %s° clockwise before OCR.", angle)
-            # OSD reports the clockwise turn needed; PIL rotates counter-clockwise.
-            image = image.rotate(-angle, expand=True, fillcolor=255)
+    angle = _detect_rotation(image)
+    if angle:
+        logger.info("Rotating a page %s° clockwise before OCR.", angle)
+        # OSD reports the clockwise turn needed; PIL rotates counter-clockwise.
+        image = image.rotate(-angle, expand=True, fillcolor=255)
     return _run_tesseract(image)
 
 
 def _run_tesseract(image: Image.Image) -> str:
     pytesseract = _pytesseract()
     try:
-        return (pytesseract.image_to_string(
-            image, lang=ocr_languages(), config=OCR_CONFIG
-        ) or "").strip()
+        return (pytesseract.image_to_string(image, lang=ocr_languages()) or "").strip()
     except Exception as exc:  # noqa: BLE001 — one unreadable page must not sink the file
         logger.warning("OCR failed on one image (%s: %s).", type(exc).__name__, exc)
         return ""

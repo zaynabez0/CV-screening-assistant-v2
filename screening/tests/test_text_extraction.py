@@ -39,6 +39,18 @@ def _fresh_ocr_probe():
     ocr.reset_ocr_cache()
 
 
+def without_tesseract(monkeypatch):
+    """Simulate a machine where the binary is not installed.
+
+    Makes the engine probe itself fail, which is the real path a machine without
+    Tesseract takes — rather than flipping a flag that only exists for tests.
+    """
+    def missing():
+        raise OSError("tesseract is not installed")
+
+    monkeypatch.setattr(ocr, "_pytesseract", missing)
+    ocr.reset_ocr_cache()
+
 # --- The happy paths: a real PDF and a real DOCX both yield usable text -------
 
 def test_clean_pdf_extracts_text_from_every_page():
@@ -147,22 +159,12 @@ def test_a_text_layer_is_preferred_over_ocr():
     assert "EDUCATION\nMSc Computer Science, ENSIAS, 2021\nSKILLS" in text
 
 
-@needs_ocr
-def test_ocr_can_be_switched_off(monkeypatch):
-    """OCR_ENABLED=0 puts extraction back to text-layer-only, for a machine where the
-    OCR cost is not wanted. A scan then reads as empty, exactly as it did in v1."""
-    monkeypatch.setattr(ocr, "OCR_ENABLED", False)
-    ocr.reset_ocr_cache()
-
-    assert extract_text_from_file(str(FIXTURES / "scanned_cv.pdf")) == ""
-
 
 def test_extraction_degrades_rather_than_fails_without_tesseract(monkeypatch):
     """The promise the module makes to the app: no Tesseract installed means scans come
     back empty and get rejected with a reason — never an exception, and never a CV with
     a text layer failing to import."""
-    monkeypatch.setattr(ocr, "OCR_ENABLED", False)
-    ocr.reset_ocr_cache()
+    without_tesseract(monkeypatch)
 
     assert extract_text_from_file(str(FIXTURES / "scanned_cv.pdf")) == ""
     assert "Amina Benali" in extract_text_from_file(str(FIXTURES / "clean_cv.pdf"))
@@ -171,8 +173,7 @@ def test_extraction_degrades_rather_than_fails_without_tesseract(monkeypatch):
 def test_an_image_file_without_ocr_says_so(monkeypatch):
     """An image has no text layer to fall back on, so this is not "empty file" — it is a
     server configuration problem, and the reason has to say which."""
-    monkeypatch.setattr(ocr, "OCR_ENABLED", False)
-    ocr.reset_ocr_cache()
+    without_tesseract(monkeypatch)
 
     with pytest.raises(TextExtractionError, match="Tesseract is not available"):
         extract_text_from_file(str(FIXTURES / "scanned_cv.png"))
