@@ -19,7 +19,6 @@ from candidates.models import Candidate
 
 from .exports import build_summary_workbook
 from .models import Override, ScreeningRun, StageResult
-from .usage import step_cost
 from screening.stage2_ranking.keywords import seed_keywords
 from screening.stage2_ranking.ranking import shortlist_size
 
@@ -106,7 +105,6 @@ def stage1_review(request, run_id):
 
     return render(request, "runs/stage1_review.html", {
         "run": run,
-        "step_cost": step_cost(run, "stage1"),
         "step_done": run.has_passed("stage1_pending"),
         "results": results,
         "passed": [r for r in results if r.passed],
@@ -194,7 +192,6 @@ def stage2_review(request, run_id):
 
     return render(request, "runs/stage2_review.html", {
         "run": run,
-        "step_cost": step_cost(run, "stage2"),
         "step_done": run.has_passed("stage2_pending"),
         "rows": rows,
         "keywords_text": "\n".join(run.stage2_keywords),
@@ -345,7 +342,6 @@ def stage3_review(request, run_id):
 
     return render(request, "runs/stage3_review.html", {
         "run": run,
-        "step_cost": step_cost(run, "stage3"),
         "step_done": run.has_passed("stage3_pending"),
         "rubric": weighted,
         "rubric_empty": not rubric,

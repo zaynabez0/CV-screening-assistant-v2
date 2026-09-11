@@ -85,7 +85,6 @@
 
     {% if run.current_stage == "stage2_pending" and run.job_status != "running" %}
       <h2>Confirm</h2>
-      {% include "runs/_step_cost.html" %}
       <p>Confirming carries the top {{ shortlist_count }} candidate(s) into Stage 3.
          Nothing runs automatically.</p>
       <form method="post" action="{% url 'runs:stage2_confirm' run.pk %}">

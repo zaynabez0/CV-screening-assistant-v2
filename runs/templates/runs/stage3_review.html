@@ -122,7 +122,6 @@
 
     {% if run.current_stage == "stage3_pending" and run.job_status != "running" %}
       <h2>Confirm</h2>
-      {% include "runs/_step_cost.html" %}
       <p>Confirming carries these scores into Final Review. Nothing runs automatically.</p>
       <form method="post" action="{% url 'runs:stage3_confirm' run.pk %}">
         {% csrf_token %}
