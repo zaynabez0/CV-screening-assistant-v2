@@ -3,11 +3,17 @@
 {% block heading %}Upload CVs{% endblock %}
 
 {% block content %}
-  <p>PDF and DOCX only. Scanned documents with no text layer are rejected — there is no OCR in v1.</p>
+  <p>PDF, DOCX, or an image of a printed CV (PNG, JPG, TIFF, BMP, WEBP). Anything
+     without a text layer — a scan, a photo, a picture pasted into Word — is read with
+     OCR, so <strong>a batch of scans takes a second or two per page to validate</strong>.
+     A file OCR still cannot read is rejected with its reason, and the rest of the batch
+     is unaffected.</p>
 
   <form method="post" enctype="multipart/form-data">
     {% csrf_token %}
-    <p><input type="file" name="cvs" multiple accept=".pdf,.docx" {% if blocked %}disabled{% endif %}></p>
+    <p><input type="file" name="cvs" multiple
+           accept=".pdf,.docx,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
+           {% if blocked %}disabled{% endif %}></p>
     <button type="submit" {% if blocked %}disabled{% endif %}>Validate and add to run</button>
   </form>
   <p class="muted">Uploading only validates. Nothing is sent to the LLM until you press

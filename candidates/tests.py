@@ -13,12 +13,17 @@ from django.urls import reverse
 
 from candidates.models import Candidate
 from jobs.models import JobDescription
+from screening.common import ocr
 from runs.models import ScreeningRun
 from runs.services import run_cv_structuring
 
 FIXTURES = Path(__file__).resolve().parent.parent / "screening" / "tests" / "fixtures"
 
 pytestmark = pytest.mark.django_db
+
+needs_ocr = pytest.mark.skipif(
+    not ocr.ocr_available(), reason="Tesseract is not installed on this machine"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -101,13 +106,45 @@ def test_upload_records_a_rejection_reason_instead_of_crashing(client, run):
     assert clean.status == "pending"              # one bad file does not sink the batch
 
 
-def test_upload_flags_a_scanned_pdf_with_the_specified_reason(client, run):
+def test_upload_flags_a_file_with_nothing_readable_with_the_specified_reason(client, run):
+    """Not a scan any more — OCR reads those. This fixture is a page of drawn shapes,
+    so there is genuinely nothing to find, by text layer or by OCR."""
     client.post(reverse("candidates:upload", args=[run.pk]),
                 {"cvs": [upload_file("no_text_layer.pdf")]})
 
     candidate = Candidate.objects.get(run=run)
     assert candidate.status == "rejected"
-    assert candidate.rejection_reason == "no extractable text found"
+    # startswith, not ==: on a server with no Tesseract the reason says so as well.
+    assert candidate.rejection_reason.startswith("no extractable text found")
+
+
+@needs_ocr
+def test_upload_accepts_a_scanned_cv(client, run):
+    """The headline change: a CV that is only a picture is validated like any other."""
+    client.post(reverse("candidates:upload", args=[run.pk]),
+                {"cvs": [upload_file("scanned_cv.pdf")]})
+
+    candidate = Candidate.objects.get(run=run)
+    assert candidate.status == "pending"
+    assert "KARIM ZAHRAOUI" in candidate.extracted_text
+
+
+@needs_ocr
+def test_upload_accepts_an_image_of_a_cv(client, run):
+    client.post(reverse("candidates:upload", args=[run.pk]),
+                {"cvs": [upload_file("scanned_cv.png")]})
+
+    candidate = Candidate.objects.get(run=run)
+    assert candidate.status == "pending"
+    assert "Nador Steelworks" in candidate.extracted_text
+
+
+def test_upload_keeps_the_text_it_read(client, run):
+    """Validation reads the file to check it holds text; throwing that away would mean
+    structuring re-runs OCR on every scan for a result that cannot have changed."""
+    client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
+
+    assert "Amina Benali" in Candidate.objects.get(run=run).extracted_text
 
 
 def test_upload_marks_a_second_copy_as_duplicate_not_rejected(client, run):
@@ -158,6 +195,29 @@ def test_structuring_receives_the_extracted_cv_text(client, run):
     mock = structure(run, return_value=fake_extraction())
 
     assert "Amina Benali" in mock.call_args.args[0]     # real text from the PDF, not the filename
+
+
+def test_structuring_reuses_the_text_from_upload_instead_of_reading_the_file_again(client, run):
+    """The whole point of storing it: on a batch of scans, re-extracting here would
+    repeat seconds of OCR per page."""
+    client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
+
+    with patch("runs.services.extract_text_from_file") as extract:
+        mock = structure(run, return_value=fake_extraction())
+
+    extract.assert_not_called()
+    assert "Amina Benali" in mock.call_args.args[0]
+
+
+def test_structuring_still_reads_the_file_when_no_text_was_stored(client, run):
+    """Candidates recorded before the text was stored must keep working."""
+    client.post(reverse("candidates:upload", args=[run.pk]), {"cvs": [upload_file("clean_cv.pdf")]})
+    Candidate.objects.filter(run=run).update(extracted_text="")
+
+    mock = structure(run, return_value=fake_extraction())
+
+    assert "Amina Benali" in mock.call_args.args[0]
+    assert "Amina Benali" in Candidate.objects.get(run=run).extracted_text   # and stored now
 
 
 def test_structuring_skips_rejected_candidates(client, run):

@@ -90,6 +90,7 @@ def upload_cvs(request, run_id):
                 rejected += 1
             else:
                 candidate.file_hash = result["file_hash"]
+                candidate.extracted_text = result["text"]  # so structuring need not OCR again
                 candidate.status = "pending"  # validated; awaiting structuring
                 accepted += 1
             candidate.save()

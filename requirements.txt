@@ -7,9 +7,17 @@ openai
 # Loads .env so the API key and gateway settings reach the app
 python-dotenv
 
-# Text extraction from PDF / DOCX
-pymupdf
+# Text extraction from PDF / DOCX. pymupdf also rasterizes PDF pages for OCR, which
+# is why Poppler (and pdf2image) are NOT needed — one less system install per machine.
+# >=1.24.3 for the `import pymupdf` spelling; `import fitz` is deprecated.
+pymupdf>=1.24.3
 python-docx
+
+# OCR, for anything with no text layer: a scanned PDF, a photo of a printed CV, a
+# picture pasted into Word. pytesseract is only a wrapper — the Tesseract binary is a
+# SYSTEM install and pip will not bring it. See README section 1.
+pytesseract
+pillow
 
 # Real file-type check via magic bytes (needs system libmagic installed)
 python-magic
