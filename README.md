@@ -103,6 +103,18 @@ python manage.py check_ocr screening/tests/fixtures/scanned_cv.pdf
 
 That fixture is a CV that exists only as pictures. If its text comes back, OCR works.
 
+To see what a *real* CV extracts to — which is exactly the text the LLM is sent, so it is
+the first thing to look at when a CV structures badly:
+
+```bash
+python manage.py check_ocr samples/some_cv.pdf --full      # print all of it
+python manage.py check_ocr samples/some_cv.pdf --out extracted.txt   # or read it in an editor
+```
+
+Put real CVs in `samples/`, which is gitignored. **Not** in `screening/tests/fixtures/` —
+that folder is committed, and a real CV in Git history is personal data that cannot be
+taken back out.
+
 ### Tuning OCR
 
 Every one of these is optional; the defaults are what runs if you set none of them.
