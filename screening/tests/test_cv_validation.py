@@ -133,11 +133,22 @@ def test_an_image_named_as_a_pdf_is_still_caught_by_the_magic_check():
         validate_cv_file(str(FIXTURES / "scanned_cv.png"), "scanned_cv.pdf")
 
 
+def without_tesseract(monkeypatch):
+    """Simulate a machine where the binary is not installed.
+
+    Makes the engine probe itself fail, which is the real path a machine without
+    Tesseract takes — rather than flipping a flag that only exists for tests.
+    """
+    def missing():
+        raise OSError("tesseract is not installed")
+
+    monkeypatch.setattr(ocr, "_pytesseract", missing)
+    ocr.reset_ocr_cache()
+
 def test_a_scan_on_a_server_without_ocr_says_which_thing_is_missing(monkeypatch):
     """"No extractable text" would blame the CV for a server that is missing a package.
     The recruiter cannot fix the file, but somebody can fix the server."""
-    monkeypatch.setattr(ocr, "OCR_ENABLED", False)
-    ocr.reset_ocr_cache()
+    without_tesseract(monkeypatch)
 
     with pytest.raises(CVValidationError, match="OCR is not installed on the server"):
         validate_cv_file(str(FIXTURES / "scanned_cv.pdf"), "scanned_cv.pdf")

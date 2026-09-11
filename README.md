@@ -117,21 +117,18 @@ taken back out.
 
 ### Tuning OCR
 
-Every one of these is optional; the defaults are what runs if you set none of them.
-They go in `.env`, like the settings in [§3](#3-configure-the-llm). They are
-deliberately **not** in `.env.example`: that file lists only what you have to fill
-in, and everything below already works without being set.
+There is nothing to configure. The four values worth touching are constants at the top
+of `screening/common/ocr.py`, next to the code that reads them:
 
-| Variable | Default | What it does |
+| Constant | Default | What it does |
 |---|---|---|
-| `OCR_ENABLED` | on | `0` turns OCR off — extraction falls back to text layers only. |
 | `OCR_LANGUAGES` | `eng+fra` | Language packs, `+`-joined. Each must be installed; any that is not is dropped with a warning rather than failing the file. |
 | `OCR_DPI` | `300` | Render resolution for PDF pages. 300 is what Tesseract is trained for; lower is faster and noticeably worse. |
 | `OCR_MIN_CHARS_PER_PAGE` | `100` | A page with less real text than this is treated as a scan and sent to OCR. |
 | `OCR_MAX_PAGES` | `30` | Cap on pages OCR'd per file. |
-| `OCR_CONFIG` | *(empty)* | Extra Tesseract flags, e.g. `--psm 4` for a CV laid out in columns. |
-| `OCR_DETECT_ORIENTATION` | on | Check each OCR'd page for a sideways scan first. Costs one extra pass per page. |
-| `TESSERACT_CMD` | *(empty)* | Full path to the binary, when it is installed but not on `PATH`. |
+
+`TESSERACT_CMD` is the one OCR setting that is still an environment variable, because it
+is the one that genuinely differs per machine — see [§3](#3-configure-the-llm).
 
 **After every `git pull`, run `python manage.py migrate`.** New code often carries a
 schema change, and an out-of-date database fails at the first page that touches the new
@@ -408,11 +405,11 @@ web server, and it is enforced by a check in the test suite.
 |---|---|
 | `OperationalError: no such column: ...` right after pulling | New code, old database. Run `python manage.py migrate`. Django warns about this on startup too, a few lines above the traceback. |
 | `ImportError: failed to find libmagic.  Check your installation` | The system library is missing — see [Prerequisites](#1-prerequisites). |
-| Every scanned CV is rejected with "no extractable text found" | Run `python manage.py check_ocr`. It will say whether Tesseract is missing, off (`OCR_ENABLED=0`), or installed but not on `PATH` (set `TESSERACT_CMD`). |
+| Every scanned CV is rejected with "no extractable text found" | Run `python manage.py check_ocr`. It will say whether Tesseract is missing, or installed but not on `PATH` (set `TESSERACT_CMD`). |
 | `TesseractNotFoundError` | Tesseract is installed but not on `PATH` — the usual Windows case. Set `TESSERACT_CMD` in `.env` to the full path of `tesseract.exe`. |
 | A scan is read, but the accented words are mangled | The French pack is missing: `sudo apt-get install tesseract-ocr-fra`, or re-run the Windows installer and tick French. `check_ocr` lists the packs it found. |
 | Uploading a batch of scans is slow | Expected: OCR runs at upload, a second or two per page, because validation has to know whether the file holds readable text before it says the CV was accepted. It is not repeated at structuring — the text is stored on the candidate. |
-| A scan comes back as gibberish | It is probably sideways and the orientation check could not tell. Try a higher `OCR_DPI`, or `OCR_CONFIG=--psm 4` for a columned layout. |
+| A scan comes back as gibberish | It is probably sideways and the orientation check could not tell. Try a higher `OCR_DPI` in `screening/common/ocr.py`. |
 | `KEY_REGULATOR_API_KEY is not set, so ...` | Check `.env` exists in the project root and that the key line is filled in. A line that is present but empty counts as unset. |
 | `MODEL is not set, so there is no model to call` | Same file, same rule — there is no default model, so this line must name one. |
 | `BASE_URL is not set, so there is no endpoint ...` | Same again — there is no default endpoint either. Fill in the address your provider gave you. |

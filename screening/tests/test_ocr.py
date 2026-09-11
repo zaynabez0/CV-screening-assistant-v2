@@ -55,15 +55,9 @@ def _fresh_probe():
 
 @pytest.fixture
 def engine(monkeypatch):
-    """Install a fake engine and hand it back so tests can assert on the calls.
-
-    OCR_ENABLED is forced on: these tests are about what happens around the engine,
-    and must not change their answer because the machine running them has OCR switched
-    off in its own .env.
-    """
+    """Install a fake engine and hand it back so tests can assert on the calls."""
     def install(**kwargs):
         fake = FakeTesseract(**kwargs)
-        monkeypatch.setattr(ocr, "OCR_ENABLED", True)
         monkeypatch.setattr(ocr, "_pytesseract", lambda: fake)
         return fake
     return install
@@ -80,15 +74,6 @@ def test_a_missing_tesseract_is_reported_not_raised(engine):
 
     assert ocr.ocr_available() is False
     assert ocr.image_to_text(page()) == ""      # and reading still returns a value
-
-
-def test_ocr_can_be_disabled_without_touching_the_engine(engine, monkeypatch):
-    fake = engine()
-    monkeypatch.setattr(ocr, "OCR_ENABLED", False)
-
-    assert ocr.ocr_available() is False
-    assert ocr.image_to_text(page()) == ""
-    assert fake.calls == []
 
 
 def test_the_engine_is_probed_once(engine, monkeypatch):
@@ -126,13 +111,12 @@ def test_english_is_the_last_resort(engine, monkeypatch):
     assert ocr.ocr_languages() == "eng"
 
 
-def test_the_language_string_reaches_the_engine(engine, monkeypatch):
+def test_the_language_string_reaches_the_engine(engine):
     fake = engine(languages=("eng", "fra"))
-    monkeypatch.setattr(ocr, "OCR_CONFIG", "--psm 4")
 
-    ocr.image_to_text(page(), detect_orientation=False)
+    ocr.image_to_text(page())
 
-    assert fake.calls == [{"size": (2000, 2800), "lang": "eng+fra", "config": "--psm 4"}]
+    assert fake.calls == [{"size": (2000, 2800), "lang": "eng+fra", "config": None}]
 
 
 # --- Orientation --------------------------------------------------------------
@@ -162,15 +146,6 @@ def test_an_unavailable_orientation_check_does_not_stop_the_read(engine):
 
     assert ocr.image_to_text(page()) == "page text"
     assert len(fake.calls) == 1
-
-
-def test_orientation_detection_can_be_switched_off(engine, monkeypatch):
-    fake = engine(osd={"rotate": 90, "orientation_conf": 12.0})
-    monkeypatch.setattr(ocr, "OCR_DETECT_ORIENTATION", False)
-
-    ocr.image_to_text(page(size=(2800, 2000)))
-
-    assert fake.calls[0]["size"] == (2800, 2000)
 
 
 # --- Preparing the image ------------------------------------------------------
