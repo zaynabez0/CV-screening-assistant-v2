@@ -1,7 +1,7 @@
 """How the shared LLM client is configured from the environment. No network calls.
 
 Three variables, one name each, all read straight from the environment:
-KEY_REGULATOR_API_KEY, OPENAI_MODEL and the optional OPENAI_BASE_URL. Every stage that
+KEY_REGULATOR_API_KEY, MODEL and the optional BASE_URL. Every stage that
 calls an LLM goes through this one helper, so a mistake here breaks all five at once.
 
 Blank is treated as unset for all three, which matters because `.env.example` ships
@@ -101,7 +101,7 @@ def test_without_a_base_url_openai_itself_is_used(monkeypatch):
 
 
 def test_a_blank_base_url_falls_back_to_the_default(monkeypatch):
-    """`OPENAI_BASE_URL=` with nothing after it is how the template ships. The SDK
+    """`BASE_URL=` with nothing after it is how the template ships. The SDK
     resolves that to an EMPTY base URL and never applies its own default — whether the
     argument is omitted or passed as None — so every request would go nowhere. We pass
     a concrete URL to make that impossible."""
