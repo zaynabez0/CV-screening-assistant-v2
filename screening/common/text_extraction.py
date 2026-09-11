@@ -31,7 +31,6 @@ is still returned, and `screening.common.ocr.ocr_available()` reports false so a
 caller can explain why a scan came back empty.
 """
 
-import io
 import logging
 import zipfile
 
@@ -57,11 +56,9 @@ from screening.common.ocr import (
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp"}
-SUPPORTED_EXTENSIONS = {"pdf", "docx"} | IMAGE_EXTENSIONS
 
-# Quality of the per-page JPEGs from extract_text_and_images_from_pdf. 51 keeps a
-# page legible to a human at roughly a tenth of the PNG size.
-PAGE_JPEG_QUALITY = 51
+# Below this many characters, a file is treated as unreadable and rejected at upload.
+MIN_EXTRACTABLE_CHARS = 50
 
 # How much more text OCR must find before it is trusted over a page's own text layer.
 # 1.0 would swap a perfectly good short page — a skills-only last page, say — for a
@@ -95,7 +92,7 @@ def extract_text_from_file(file_path: str) -> str:
     """
     ext = file_path.lower().rsplit(".", 1)[-1]
     if ext == "pdf":
-        text, _ = _extract_pdf(file_path)
+        text = _extract_pdf(file_path)
     elif ext == "docx":
         text = _extract_docx(file_path)
     elif ext in IMAGE_EXTENSIONS:
@@ -105,22 +102,11 @@ def extract_text_from_file(file_path: str) -> str:
     return text.strip()
 
 
-def extract_text_and_images_from_pdf(file_path: str) -> tuple[str, list[bytes]]:
-    """The same PDF extraction, plus one grayscale JPEG per page.
-
-    Nothing in the screening pipeline needs the images — every stage reads the
-    structured JSON, never the file. It is here for callers that want to show the
-    page a value was read from, or to send the page itself to a vision model.
-    Rendering every page costs real time, so `extract_text_from_file` does not.
-    """
-    return _extract_pdf(file_path, want_images=True)
-
-
-def has_extractable_text(text: str, min_chars: int = 50) -> bool:
+def has_extractable_text(text: str) -> bool:
     """False when a file yielded nothing usable — a scan OCR could not read, or a
     machine with no Tesseract installed at all. Either way the file cannot be
     screened, and the caller rejects it with a reason."""
-    return len(text) >= min_chars
+    return len(text) >= MIN_EXTRACTABLE_CHARS
 
 
 # --- PDF ----------------------------------------------------------------------
@@ -145,18 +131,11 @@ def _render_page(page: fitz.Page) -> Image.Image:
     return Image.frombytes("L", (pixmap.width, pixmap.height), pixmap.samples)
 
 
-def _as_jpeg(image: Image.Image) -> bytes:
-    buffer = io.BytesIO()
-    image.save(buffer, format="JPEG", quality=PAGE_JPEG_QUALITY)
-    return buffer.getvalue()
-
-
-def _extract_pdf(file_path: str, want_images: bool = False) -> tuple[str, list[bytes]]:
+def _extract_pdf(file_path: str) -> str:
     """Page text, page by page, with OCR standing in for whichever pages need it."""
     document = _open_pdf(file_path)
     ocr_ready = ocr_available()
     pages: list[str] = []
-    images: list[bytes] = []
     ocr_used = 0
     ocr_skipped = 0
 
@@ -173,25 +152,22 @@ def _extract_pdf(file_path: str, want_images: bool = False) -> tuple[str, list[b
             if wants_ocr and ocr_used >= OCR_MAX_PAGES:
                 wants_ocr = False
                 ocr_skipped += 1
-            if wants_ocr or want_images:
+            if wants_ocr:
                 try:
                     image = _render_page(page)
                 except Exception as exc:  # noqa: BLE001 — a page that will not rasterize
                     logger.warning("Could not render page %s of %s (%s).",
                                    number, file_path, type(exc).__name__)
                 else:
-                    if want_images:
-                        images.append(_as_jpeg(image))
-                    if wants_ocr:
-                        ocr_used += 1
-                        recovered = _clean(image_to_text(prepare_image(image)))
-                        # OCR only *replaces* a text layer when it clearly recovers more
-                        # than was there — a page with a two-line heading over a scanned
-                        # body must not keep the two lines and drop the body. A short but
-                        # genuine page keeps its text layer, which is exact where OCR
-                        # merely guesses.
-                        if len(recovered) > len(text) * OCR_REPLACE_RATIO:
-                            text = recovered
+                    ocr_used += 1
+                    recovered = _clean(image_to_text(prepare_image(image)))
+                    # OCR only *replaces* a text layer when it clearly recovers more
+                    # than was there — a page with a two-line heading over a scanned
+                    # body must not keep the two lines and drop the body. A short but
+                    # genuine page keeps its text layer, which is exact where OCR
+                    # merely guesses.
+                    if len(recovered) > len(text) * OCR_REPLACE_RATIO:
+                        text = recovered
             pages.append(text)
     finally:
         document.close()
@@ -203,7 +179,7 @@ def _extract_pdf(file_path: str, want_images: bool = False) -> tuple[str, list[b
     if not any(pages) and not ocr_ready:
         logger.warning("%s has no text layer and OCR is unavailable — nothing extracted.",
                        file_path)
-    return "\n".join(page for page in pages if page), images
+    return "\n".join(page for page in pages if page)
 
 
 # --- DOCX ---------------------------------------------------------------------
@@ -359,8 +335,6 @@ def _extract_image(file_path: str) -> str:
         )
     try:
         return _clean(image_file_to_text(file_path))
-    except TextExtractionError:
-        raise
     except Exception as exc:  # noqa: BLE001 — a truncated or unsupported image file
         raise TextExtractionError(f"unreadable image ({type(exc).__name__})") from exc
 
