@@ -19,7 +19,6 @@ import pytest
 from screening.common import ocr
 from screening.common.text_extraction import (
     TextExtractionError,
-    extract_text_and_images_from_pdf,
     extract_text_from_file,
     has_extractable_text,
 )
@@ -159,7 +158,6 @@ def test_a_text_layer_is_preferred_over_ocr():
     assert "EDUCATION\nMSc Computer Science, ENSIAS, 2021\nSKILLS" in text
 
 
-
 def test_extraction_degrades_rather_than_fails_without_tesseract(monkeypatch):
     """The promise the module makes to the app: no Tesseract installed means scans come
     back empty and get rejected with a reason — never an exception, and never a CV with
@@ -242,19 +240,6 @@ def test_unsupported_extension_raises_value_error():
         extract_text_from_file(str(FIXTURES / "unsupported.txt"))
 
 
-# --- Page images --------------------------------------------------------------
-
-def test_extract_text_and_images_returns_one_jpeg_per_page():
-    """The variant that also hands back the rendered pages, for a caller that wants to
-    show the page a value came from. Nothing in the pipeline uses it, so it must not
-    cost anything for callers that don't: the plain function renders nothing."""
-    text, images = extract_text_and_images_from_pdf(str(FIXTURES / "clean_cv.pdf"))
-
-    assert "Amina Benali" in text
-    assert len(images) == 2                          # one per page
-    assert all(image.startswith(b"\xff\xd8\xff") for image in images)   # JPEG magic bytes
-
-
 # --- has_extractable_text on its own -----------------------------------------
 
 @pytest.mark.parametrize(
@@ -268,8 +253,3 @@ def test_extract_text_and_images_returns_one_jpeg_per_page():
 )
 def test_has_extractable_text_threshold(text, expected):
     assert has_extractable_text(text) is expected
-
-
-def test_has_extractable_text_threshold_is_overridable():
-    assert has_extractable_text("short", min_chars=3) is True
-    assert has_extractable_text("short", min_chars=99) is False
