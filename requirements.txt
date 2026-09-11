@@ -24,6 +24,3 @@ python-magic
 
 # Excel export of the run summary
 openpyxl
-
-# Tests
-pytest-django
